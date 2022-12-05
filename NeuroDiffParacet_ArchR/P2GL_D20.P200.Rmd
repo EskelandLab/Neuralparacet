@@ -1,0 +1,367 @@
+---
+#==========================================================================================================================
+title: "Neuronal Differentiation Paracet scATACSeq p2Glinksd20.p200 "
+author: "Ankush Sharma"
+date: "`r Sys.Date()`"
+output: html_document
+Description: This script analyzes the peak2genelinks analysis for D20 P200 sample for kmeans of 5 of the manuscript  as seen in manuscript figure of Spildrejorde et al. 
+
+#==========================================================================================================================
+---
+
+```{r Reloading Projects}
+#OR load Projects IF entire code had been run once and user need to load the projects for further additional analysis
+
+#paracetP1<-loadArchRProject("Save-paracetP1/")
+#paracetP2<-loadArchRProject("Save-paracetP2/")
+#paracetP3<-loadArchRProject("Save-paracetP3/")
+#paracetP4<-loadArchRProject("Save-paracetP4/")
+#paracetP5<-loadArchRProject("Save-paracetP5/")
+```
+#D0-D20Peak2genelink
+```{r peak2gene day 20} 
+unique(paracetP5$Sample)
+idxSample <- BiocGenerics::which(paracetP5$Sample %in% "D20.P200")
+cellsSample <- paracetP5$cellNames[idxSample]
+day20_archr <- paracetP5[cellsSample, ]
+day20_archr <- addPeak2GeneLinks(
+    ArchRProj = day20_archr,
+    reducedDims = "IterativeLSI",
+    useMatrix = "GeneIntegrationMatrix"
+    )
+p2g_d20 <- getPeak2GeneLinks(
+    ArchRProj = day20_archr,
+    corCutOff = 0.45,
+    resolution = 1,
+    returnLoops = FALSE
+)
+p2g_d20
+metadata(p2g_d20)
+
+
+
+p2g_d20$geneName <- mcols(metadata(p2g_d20)$geneSet)$name[p2g_d20$idxRNA]
+tssgenes<- as.data.frame(metadata(p2g_d20)$geneSet)
+colnames(tssgenes)[2] <- "StartTSS"
+colnames(tssgenes)[3] <- "EndTSS"
+p2g_d20$peakName <- (metadata(p2g_d20)$peakSet %>% {paste0(seqnames(.), "_", start(.), "_", end(.))})[p2g_d20$idxATAC]
+p2g_d20_df=as.data.frame(p2g_d20)
+temp  <- strsplit(p2g_d20$peakName, "_")
+temp <- matrix(unlist(temp), ncol=3, byrow=TRUE)
+temp <- as.data.frame(temp)
+p2g_d20_df$chr <- temp$V1
+p2g_d20_df$start <- temp$V2
+p2g_d20_df$end <- temp$V3
+mergedp2g_d20 <- merge(p2g_d20_df,tssgenes ,by.x="geneName", by.y= "name")
+mergedp2g_d20$peakCentre=as.numeric(mergedp2g_d20$start)+250
+mergedp2g_d20$looplength=as.numeric(mergedp2g_d20$StartTSS)-as.numeric(mergedp2g_d20$peakCentre)
+#writes peak2genelink table
+write.table(mergedp2g_d20,"day20p200_paracet_peak2genelinks_corr_0.45_res-1_loopobject.txt")
+
+p_d20.p200 <- plotPeak2GeneHeatmap(ArchRProj = day20_archr, groupBy = "Clusters2",
+seed = 1,
+  palATAC = paletteContinuous("coolwarm"),
+  palRNA = paletteContinuous("blueYellow"),
+  corCutOff = 0.45,
+  FDRCutOff = 1e-04,
+  k = 5,
+palGroup = c('P3' = '#8175AA','P9' = '#8CC2CA','P5' = '#B15928',  'P10' = '#C0D6E4', 'P13' = '#A3ECB9')
+)
+#
+
+##plotPDF(p_d20.p200, name = "__d20p200_Paracet_5_Plot-Heatmap_peak2genelinks-scRNA_scATAC_blueyellow_purpleOrange_updated.pdf",pal = constrained_palette, ArchRProj = day20_archr, addDOC = TRUE, width = 6, height = 16)
+p_d20.p200
+dev.copy(pdf,paste0("__d20p200_Paracet_5_Plot-Heatmap_peak2genelinks-scRNA_scATAC_blueyellow_purpleOrange_updated.pdf"), width=6, height=16, paper='special')
+dev.off()    
+#to obtain matrices for kmeans returnMatrices= TRUE
+peak2genelink_d20 <- plotPeak2GeneHeatmap(ArchRProj = day20_archr, 
+  groupBy = "Clusters2",
+  seed = 1,
+  palATAC = paletteContinuous("coolwarm"),
+  palRNA = paletteContinuous("blueYellow"),
+  corCutOff = 0.45,
+  FDRCutOff = 1e-04,
+returnMatrices = TRUE,
+ k = 5,
+nPlot = 100000 
+)
+#fetching kmeans for ATAC and RNA 
+p2gl_d20 <- as.data.frame(peak2genelink_d20@listData[["Peak2GeneLinks"]])
+p2g_d20_atac <- as.data.frame(peak2genelink_d20@listData[["ATAC"]]@listData[["kmeansId"]])
+p2gl_d20$kmeansATAC <- p2g_d20_atac$`peak2genelink_d20@listData[["ATAC"]]@listData[["kmeansId"]]`
+p2g_d20_rna <- as.data.frame(peak2genelink_d20@listData[["RNA"]]@listData[["kmeansId"]])
+p2gl_d20$kmeansRNA <- p2g_d20_rna$`peak2genelink_d20@listData[["RNA"]]@listData[["kmeansId"]]`
+p2gl_d20$peak <- str_replace(p2gl_d20$peak,":","_")
+p2gl_d20$peak <- str_replace(p2gl_d20$peak,"-","_")
+p2gl_d20
+
+##checking if the kmeans are merged correctly
+p2gl_d20_mat=as.data.frame(peak2genelink_d20@listData[["ATAC"]]$matrix)
+p2gl_d20_kmean=as.data.frame(peak2genelink_d20@listData[["ATAC"]]$kmeansId)
+rownames(p2gl_d20_kmean)=rownames(p2gl_d20_mat)
+which((rownames(p2gl_d20_kmean)==rownames(p2gl_d20))==TRUE)
+unique(p2gl_d20_kmean$`peak2genelink_d20@listData[["ATAC"]]$kmeansId`)
+
+######extraction of data of peak2genelinks ######
+
+p2gl_d20$genepeak <- paste(p2gl_d20$gene,p2gl_d20$peak,sep=":")
+
+mergedp2g_d20$genepeak <- paste(mergedp2g_d20$geneName,mergedp2g_d20$peakName,sep=":")
+alldat_d20<- merge(mergedp2g_d20,p2gl_d20,by="genepeak")
+
+library(rGREAT)
+bed =  subset(alldat_d20, select = c(chr,start,end,kmeansATAC))
+bed$start <- as.numeric(bed$start)
+bed$end <- as.numeric(bed$end)
+bed
+kmeans1 <- bed[bed$kmeansATAC == '1', ]
+bedKmeans =  subset(kmeans1, select = c(chr,start,end))
+job = submitGreatJob(bedKmeans,species = "hg38")
+tb = getEnrichmentTables(job)
+res = plotRegionGeneAssociationGraphs(job)
+dev.copy(pdf,paste0(currentjob,"day20p200_top25000rgreatanalysis_d20p100_kmeans1"), height=5, width=8)
+dev.off()
+#tb = getEnrichmentTables((job), download_by = 'tsv')
+write.table(tb$`GO Biological Process`,"_d20p200_top25000_kmeans1_bioloigical_process.tsv")
+
+
+
+kmeans2 <- bed[bed$kmeansATAC == '2', ]
+bedKmeans =  subset(kmeans2, select = c(chr,start,end))
+job = submitGreatJob(bedKmeans,species = "hg38")
+tb = getEnrichmentTables(job)
+res = plotRegionGeneAssociationGraphs(job)
+dev.copy(pdf,paste0(currentjob,"_day20p200_rgreatanalysisd20kmeans2"), height=5, width=8)
+dev.off()
+#tb = getEnrichmentTables((job), download_by = 'tsv')
+write.table(tb$`GO Biological Process`,"_day20p200_kmeans2_bioloigical_process.tsv")
+
+
+kmeans3 <- bed[bed$kmeansATAC == '3', ]
+bedKmeans =  subset(kmeans3, select = c(chr,start,end))
+job = submitGreatJob(bedKmeans,species = "hg38")
+tb = getEnrichmentTables(job)
+res = plotRegionGeneAssociationGraphs(job)
+dev.copy(pdf,paste0(currentjob,"_day20p200_rgreatanalysisd20kmeans3"), height=5, width=8)
+dev.off()
+#tb = getEnrichmentTables((job), download_by = 'tsv')
+write.table(tb$`GO Biological Process`,"_day20p200_kmeans3_bioloigical_process.tsv")
+
+
+
+kmeans4 <- bed[bed$kmeansATAC == '4', ]
+bedKmeans =  subset(kmeans4, select = c(chr,start,end))
+job = submitGreatJob(bedKmeans,species = "hg38")
+tb = getEnrichmentTables(job)
+res = plotRegionGeneAssociationGraphs(job)
+dev.copy(pdf,paste0(currentjob,"_day20p200_rgreatanalysisd20kmeans4"), height=5, width=8)
+dev.off()
+#tb = getEnrichmentTables((job), download_by = 'tsv')
+write.table(tb$`GO Biological Process`,"_day20p200_kmeans4_bioloigical_process.tsv")
+
+kmeans5 <- bed[bed$kmeansATAC == '5', ]
+bedKmeans =  subset(kmeans5, select = c(chr,start,end))
+job = submitGreatJob(bedKmeans,species = "hg38")
+tb = getEnrichmentTables(job)
+res = plotRegionGeneAssociationGraphs(job)
+dev.copy(pdf,paste0(currentjob,"_day20p200_rgreatanalysisd20kmeans5"), height=5, width=8)
+dev.off()
+#tb = getEnrichmentTables((job), download_by = 'tsv')
+write.table(tb$`GO Biological Process`,"_day20p200_kmeans5_bioloigical_process.tsv")
+
+
+library(dplyr)
+kmeans1_GO <- alldat_d20[alldat_d20$kmeansATAC == '1', ]
+kmeans1_GO <-  filter(kmeans1_GO, Correlation.x  > 0.7 & FDR.x<1e-4)
+kmeans2_GO <- alldat_d20[alldat_d20$kmeansATAC == '2', ]
+kmeans2_GO <- filter(kmeans2_GO, Correlation.x  > 0.7 & FDR.x<1e-4)
+kmeans3_GO <- alldat_d20[alldat_d20$kmeansATAC == '3', ]
+kmeans3_GO <- filter(kmeans3_GO, Correlation.x  > 0.7 & FDR.x<1e-4)
+kmeans4_GO <- alldat_d20[alldat_d20$kmeansATAC == '4', ]
+kmeans4_GO <- filter(kmeans4_GO, Correlation.x  > 0.7 & FDR.x<1e-4)
+kmeans5_GO <- alldat_d20[alldat_d20$kmeansATAC == '5', ]
+kmeans5_GO <- filter(kmeans5_GO, Correlation.x  > 0.7 & FDR.x<1e-4)
+mylist <- list()
+mylist[[1]] <- kmeans1_GO$gene
+mylist[[2]] <- kmeans2_GO$gene
+mylist[[3]] <- kmeans3_GO$gene
+mylist[[4]] <- kmeans4_GO$gene
+mylist[[5]] <- kmeans5_GO$gene
+```
+#gprofilerAnnotations
+```{r genelist annotation}
+library(gprofiler2)
+######################################################################################################
+##for using custom annotation 
+# upload_GMT_file(gmtfile = "/MSIGDB/c7.immunesigdb.v7.4.symbols.gmt")
+# upload_GMT_file(gmtfile = "/MSIGDB/h.all.v7.4.symbols.gmt")
+
+###
+#GOprofiler analysis 
+######################################################################################################
+multi_gostres1 <- gost(query =mylist, sources = c("GO:BP"),
+                       multi_query = TRUE)
+publish_gosttable(multi_gostres1, 
+                  highlight_terms = multi_gostres1$result[c(1:20),],
+                  use_colors = TRUE, 
+                  show_columns = c("source", "term_name", "term_size"),
+                  filename = NULL)+
+  ggtitle('Biological Processes')
+dev.copy(pdf,paste0("_gprofiler_D20_p200Kmeans_corr_0.7_significant_",currentjob,".pdf"), width=16, height=12,paper='special')
+dev.off()
+gostplot(multi_gostres1, capped = TRUE, interactive = TRUE)
+fwrite(multi_gostres1$result, file ="_d20p200_gprofiler_kmeans_gostplot_corrgreaterthan0.7_significant.csv")
+
+```
+
+#gprofilerAnnotationsd0
+```{r Plots counts pergene}
+library(gprofiler2)
+library(data.table)
+
+######################################################################################################
+##for using custom annotation 
+# upload_GMT_file(gmtfile = "/MSIGDB/c7.immunesigdb.v7.4.symbols.gmt")
+# upload_GMT_file(gmtfile = "/MSIGDB/h.all.v7.4.symbols.gmt")
+
+#GOprofiler analysis 
+######################################################################################################
+library(dplyr)
+kmeans1_GO <- alldat_d20[alldat_d20$kmeansATAC == '1', ]
+kmeans1_GO <-  filter(kmeans1_GO, Correlation.x  > 0.45 & FDR.x<1e-4)
+kmeans2_GO <- alldat_d20[alldat_d20$kmeansATAC == '2', ]
+kmeans2_GO <- filter(kmeans2_GO, Correlation.x  > 0.45 & FDR.x<1e-4)
+kmeans3_GO <- alldat_d20[alldat_d20$kmeansATAC == '3', ]
+kmeans3_GO <- filter(kmeans3_GO, Correlation.x  > 0.45 & FDR.x<1e-4)
+kmeans4_GO <- alldat_d20[alldat_d20$kmeansATAC == '4', ]
+kmeans4_GO <- filter(kmeans4_GO, Correlation.x  > 0.45 & FDR.x<1e-4)
+kmeans5_GO <- alldat_d20[alldat_d20$kmeansATAC == '5', ]
+kmeans5_GO <- filter(kmeans5_GO, Correlation.x  > 0.45 & FDR.x<1e-4)
+mylist <- list()
+mylist[[1]] <- kmeans1_GO$gene
+mylist[[2]] <- kmeans2_GO$gene
+mylist[[3]] <- kmeans3_GO$gene
+mylist[[4]] <- kmeans4_GO$gene
+mylist[[5]] <- kmeans5_GO$gene
+
+
+multi_gostres1 <- gost(query =mylist, sources = c("GO:BP"),
+                       multi_query = TRUE)
+publish_gosttable(multi_gostres1, 
+                  highlight_terms = multi_gostres1$result[c(1:20),],
+                  use_colors = TRUE, 
+                  show_columns = c("source", "term_name", "term_size"),
+                  filename = NULL)+
+  ggtitle('Biological Processes')
+dev.copy(pdf,paste0("_gprofiler_D0_p200_Kmeans_corr_0.45_significant_",currentjob,".pdf"), width=16, height=12,paper='special')
+dev.off()
+gostplot(multi_gostres1, capped = TRUE, interactive = FALSE)
+dev.copy(pdf,paste0("_gprofiler_gostplot_D20.p200_Kmeans_corr_0.45_significant_",currentjob,".pdf"), width=16, height=8,paper='special')
+fwrite(multi_gostres1$result, file ="_gprofiler_d20.p200kmeans_gostplot_corrgreaterthan0.45_significant.csv")
+
+
+```
+
+
+
+#day20PositivetfRegulator
+
+```{r motif footprinting day20 } 
+seGroupMotif <- getGroupSE(ArchRProj = day20_archr , useMatrix = "MotifMatrix", groupBy = "Clusters2")
+seZ <- seGroupMotif[rowData(seGroupMotif)$seqnames=="z",]
+
+
+rowData(seZ)$maxDelta <- lapply(seq_len(ncol(seZ)), function(x){
+  rowMaxs(assay(seZ) - assay(seZ)[,x])
+}) %>% Reduce("cbind", .) %>% rowMaxs
+
+
+
+corGSM_MM_d20 <- correlateMatrices(
+    ArchRProj = day20_archr,
+    useMatrix1 = "GeneScoreMatrix",
+    useMatrix2 = "MotifMatrix",
+    reducedDims = "IterativeLSI"
+)
+
+
+corGIM_MM_d20 <- correlateMatrices(
+    ArchRProj = day20_archr,
+    useMatrix1 = "GeneIntegrationMatrix",
+    useMatrix2 = "MotifMatrix",
+    reducedDims = "IterativeLSI"
+)
+corGIM_MM_d20
+
+corGSM_MM_d20$maxDelta <- rowData(seZ)[match(corGSM_MM_d20$MotifMatrix_name, rowData(seZ)$name), "maxDelta"]
+corGIM_MM_d20$maxDelta <- rowData(seZ)[match(corGIM_MM_d20$MotifMatrix_name, rowData(seZ)$name), "maxDelta"]
+corGSM_MM_d20 <- corGSM_MM_d20[order(abs(corGSM_MM_d20$cor), decreasing = TRUE), ]
+corGSM_MM_d20 <- corGSM_MM_d20[which(!duplicated(gsub("\\-.*","",corGSM_MM_d20[,"MotifMatrix_name"]))), ]
+corGSM_MM_d20$TFRegulator <- "NO"
+corGSM_MM_d20$TFRegulator[which(corGSM_MM_d20$cor > 0.4 & corGSM_MM_d20$pval < 0.01 & corGSM_MM_d20$maxDelta > quantile(corGSM_MM_d20$maxDelta, 0.5))] <- "YES"
+sort(corGSM_MM_d20[corGSM_MM_d20$TFRegulator=="YES",1])
+name_matrix=c('NHLH1','NHLH2','ISL1','REL','NEUROD1','NEUROG1','SP1','OTX2','YY2','KLF4','DLX6','HES','BMP7')
+library(ggrepel)
+p_GSM_d20 <- ggplot(data.frame(corGSM_MM_d20), aes(cor, maxDelta, color = TFRegulator)) +
+  geom_text_repel(
+    data = subset(data.frame(corGSM_MM_d20), corGSM_MM_d20$cor > 0.4 & corGSM_MM_d20$pval < 0.01),
+
+    aes(label = MotifMatrix_name),
+    size = 1.5,
+    box.padding = unit(0.2, "lines"),
+    point.padding = unit(0.2, "lines"))+
+  geom_point() + 
+  theme_ArchR() +
+  geom_vline(xintercept = 0, lty = "dashed") + 
+ 
+  scale_color_manual(values = c("NO"="darkgrey", "YES"="firebrick3")) +
+  xlab("Correlation To Gene Score") +
+  ylab("Max TF Motif Delta") +
+  scale_y_continuous(
+    expand = c(0,0), 
+    limits = c(0, max(corGSM_MM_d20$maxDelta)*1.05)
+  )
+library(ggplot2)
+p_GSM_d20
+dev.copy(pdf,paste0("_D20_p200_positiveTFRegulators_genescorematrixpvalue_smaller label",currentjob,".pdf"), width=8, height=10,paper='special')
+dev.off()
+
+corGIM_MM_d20<- corGIM_MM_d20[order(abs(corGIM_MM_d20$cor), decreasing = TRUE), ]
+corGIM_MM_d20 <- corGIM_MM_d20[which(!duplicated(gsub("\\-.*","",corGIM_MM_d20[,"MotifMatrix_name"]))), ]
+corGIM_MM_d20$TFRegulator <- "NO"
+corGIM_MM_d20$TFRegulator[which(corGIM_MM_d20$cor > 0.4 & corGIM_MM_d20$pval < 0.01 & corGIM_MM_d20$maxDelta > quantile(corGIM_MM_d20$maxDelta, 0.5))] <- "YES"
+sort(corGIM_MM_d20[corGIM_MM_d20$TFRegulator=="YES",1])
+
+
+p1_GIM_d20 <- ggplot(data.frame(corGIM_MM_d20), aes(cor, maxDelta, color = TFRegulator))+
+  geom_text_repel(
+    data = subset(data.frame(corGIM_MM_d20), corGIM_MM_d20$cor > 0.4 & corGIM_MM_d20$pval < 0.01),
+    aes(label = MotifMatrix_name),
+      
+    size = 2,
+    max.overlaps = 30,
+    box.padding = unit(0.3, "lines"),
+    point.padding = unit(0.3, "lines")
+    )+
+    geom_point() + 
+    theme_ArchR() +
+    geom_vline(xintercept = 0, lty = "dashed") + 
+ 
+    scale_color_manual(values = c("NO"="darkgrey", "YES"="firebrick3")) +
+    xlab("Correlation To Gene Score") +
+    ylab("Max TF Motif Delta") +
+    scale_y_continuous(
+    expand = c(0,0), 
+    limits = c(0, max(corGIM_MM_d20$maxDelta)*1.05)
+  )
+
+
+p1_GIM_d20
+dev.copy(pdf,paste0("_D20.p200_positiveTFRegulators_geneintegrationmatrix_smaller_label",currentjob,".pdf"), width=8, height=10,paper='special')
+dev.off()
+
+write.table(corGIM_MM_d20,"D20.p200_geneintegrationmatrix_positivetfRegulator_all.tsv")
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

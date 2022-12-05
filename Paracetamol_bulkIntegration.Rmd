@@ -1,0 +1,1281 @@
+---
+title: "Integration_paracetamol"
+author: "MS"
+date: "11/11/2020"
+output: html_document
+---
+
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(include = TRUE, root.dir ="Paracetamol/Integration", echo = TRUE)
+
+#rm(list=ls())  
+
+library("readr")
+#devtools::install_github("PF2-pasteur-fr/SARTools", build_opts="--no-resave-data")
+library(SARTools)
+library("DESeq2")
+library(ggplot2)
+library(tidyverse)
+library(ggthemes)
+#BiocManager::install("ReportingTools")
+library("ReportingTools")
+library("EnhancedVolcano")
+#BiocManager::install('grimbough/biomaRt')
+#packageVersion('biomaRt')
+library(biomaRt)
+library(minfi)
+#devtools::install_bitbucket("ConesaLab/more")
+library(MORE)
+library(IlluminaHumanMethylationEPICanno.ilm10b5.hg38)
+library(IlluminaHumanMethylationEPICmanifest)
+#install.packages("data.table")
+library(data.table)
+library("ggsci")
+library("gridExtra")
+#install.packages("ggExtra")
+library(ggExtra)
+
+
+```
+
+# Load data
+```{r load data}
+##Methylation data
+load("Paracetamol/Methylation/bulkdata/analysis/AllSamples/ParacetDMresults.RData")
+load("Paracetamol/Methylation/bulkdata/analysis/AllSamples/DMdata_paracet.RData")
+
+
+#RNAseq data
+load("Paracetamol/RNAseq/analysis/ParacetDEresults.RData")
+load("Paracetamol/RNAseq/analysis/DE_TR_paracet.RData")
+
+
+
+```
+
+```{r data}
+#Methylation
+#head(t_TR_p100) #pvalues for all cpgs TRp100
+#head(sig_TR_p100) #pvalues for significant cpgs TRp100
+#head(t_TR_p200) #pvalues for all cpgs TRp200
+#head(sig_TR_p200) #pvalues for significant cpgs TRp200
+#head(d7ctrl_avg_beta) #Average betavalues for D7 ctrl
+#head(d7p100_avg_beta) #Average betavalues for D7 p100
+  colnames(d7p100_avg_beta) = "100_uM_paracetamol_day_7" #Angi kolonnenavn
+#head(d7p200_avg_beta) #Average betavalues for D7p200
+  colnames(d7p200_avg_beta) = "200_uM_paracetamol_day_7" #Angi kolonnenavn
+#head(d20ctrl_avg_beta) #Average betavalues for D20 ctrl
+#head(d20p100_avg_beta) #Average betavalues for D20 p100
+  colnames(d20p100_avg_beta) = "100_uM_paracetamol_day_20" #Angi kolonnenavn
+#head(d20p200_avg_beta) #Average betavalues for D20 p200
+  colnames(d20p200_avg_beta) = "200_uM_paracetamol_day_20" #Angi kolonnenavn
+#head(meandiff.betas.D7D20) #Mean differences in betavalues D20 - D7
+#head(sig_meandiff.betas.D7D20) #Mean differences in betavalues D20 - D7 for significant cpgs
+#head(sig_TR_p200meancombined2) #Annotated, long df, Mean differences in betavalues D20 - D7 for significant cpgs
+
+avg.betas = cbind(d7ctrl_avg_beta, d7p100_avg_beta, d7p200_avg_beta, d20ctrl_avg_beta, d20p100_avg_beta, d20p200_avg_beta)
+
+
+load("Paracetamol/Methylation/bulkdata/analysis/mSetSqFlt.RData")
+mVals = getM(mSetSqFlt)
+betas = getBeta(mSetSqFlt)
+
+#RNAseq
+#resTR100annot #Results from TR P200, use for Pvals and significant genes, annotated
+resTR100annot = resTR100annot[order(resTR100annot$pvalue),]
+#resTR200annot  #Results from TR P200, use for Pvals and significant genes, annotated
+resTR200annot = resTR200annot[order(resTR200annot$pvalue),]
+
+
+#resCtrl #Results from D20 ctrl - D7 ctrl, use for finding fold change for each group
+#resP100  #Results from D20 P100 - D7 P100, use for finding fold change
+#resP200  #Results from D20 P200 - D7 P200, use for finding fold change
+#counts #Count matrix
+#normcounts.df #Normalized counts
+#FCall.long #All FC-values between D20-D7 in a long DF
+#avg.nc.D7D20 #Average normalized counts per group
+#head(FCall) #All Fold change values for each group
+#head(allFCannot)#All Fold change values for each group annotated
+
+
+##LAg df med avg normcount per group
+samples <- read.table("Paracetamol/RNAseq/Analysis/design.txt", header=TRUE)
+int_design <- read.table("Paracetamol/Integration/design.txt", header=TRUE)
+
+load("Paracetamol/RNAseq/analysis/normcounts.RData")
+
+
+```
+
+
+# Annotation
+```{r get annotation for downstream analysis}
+# get the EPIC annotation data
+annoEPIC = getAnnotation(IlluminaHumanMethylationEPICanno.ilm10b5.hg38)
+
+#head(annoEPIC)
+annoEPIC = as.data.frame(annoEPIC)
+annoEPIC$cgid=row.names(annoEPIC)
+
+
+annoEPICsub <- annoEPIC[match(rownames(mVals),annoEPIC$Name),
+                        c(1:4,12:19,22,24, 31,37,49:ncol(annoEPIC))]
+                          
+```
+
+#Find unique gene annotation for cpgs
+```{r}
+#Finn unike annoterte cpg-er
+all.genes = annoEPICsub[c("cgid", "UCSC_RefGene_Name")] # subset annotated beta matrix 
+s = strsplit(all.genes$UCSC_RefGene_Name, split = ";")
+
+uniqueGenes = data.frame(cgid = rep(all.genes$cgid, sapply(s, length)), external_gene_name = unlist(s))
+uniqueGenes = uniqueGenes[!duplicated(uniqueGenes[c(names(uniqueGenes))]),] 
+
+```
+
+# Visualize global changes in GE and ME
+```{r Visualize fold change vs mean diff}
+#Cpg-er med genannotering mean.dff per treatmentgruppe
+meandiff.betas.D7D20$cgid = rownames(meandiff.betas.D7D20)
+meandiff.betas.annot = merge(meandiff.betas.D7D20, uniqueGenes, by = "cgid")
+
+#Signifikante cpg-er med genannotering mean.dff per treatmentgruppe TR200
+sig_meandiff.betas.D7D20$cgid = rownames(sig_meandiff.betas.D7D20)
+sig_meandiff.betas.D7D20.annot = merge(sig_meandiff.betas.D7D20, uniqueGenes, by = "cgid") #2948, Ett gen kommer flere ganger, Unike: 2162
+
+#Fold change for all the significant cps for whch we have gene navn annotation
+SigCpGsRNAFC = subset(allFCannot, subset = allFCannot$external_gene_name %in%sig_meandiff.betas.D7D20.annot$external_gene_name, select = c(ensembl_gene_id,Control, p100_uM_paracetamol_day_20, p200_uM_paracetamol_day_20, external_gene_name ) ) #1853, ett gen kun en gang. Noen verdier for FC som mangler i forhold til CPGene. 
+colnames(SigCpGsRNAFC) = c("ensembl_gene_id", "Control", "100 µM paracetamol", "200 µM paracetamol", "external_gene_name")
+  
+SigCpGsMD = subset(sig_meandiff.betas.D7D20.annot, subset = sig_meandiff.betas.D7D20.annot$external_gene_name %in%SigCpGsRNAFC$external_gene_name) #2569, ett gen kommer flere ganger, unike: 1853
+
+FCMD = merge(SigCpGsRNAFC, SigCpGsMD, by = "external_gene_name", all = TRUE)
+
+SigCpGsMD.long = SigCpGsMD %>% pivot_longer(-c(cgid,external_gene_name), names_to = "Group", values_to = "Mean.diff.betas") %>% remove_rownames(.)
+SigCpGsRNAFC.long = SigCpGsRNAFC %>% pivot_longer(-c(ensembl_gene_id,external_gene_name), names_to = "Group", values_to = "log2FoldChange") %>% remove_rownames(.)
+
+FCMD = merge(SigCpGsRNAFC.long, SigCpGsMD.long, by = c("external_gene_name", "Group"), all = TRUE)
+FCMD$Group = factor(FCMD$Group, levels = c("Control", "100 µM paracetamol","200 µM paracetamol" ))
+ 
+##png("TRP200.sigannoCpGs.FCMDa.#png", width = 1200, height = 1200, res = 150)
+ggplot(FCMD, aes(Mean.diff.betas, log2FoldChange)) + 
+  geom_point(aes(col = Group))+
+  theme_minimal() +
+  labs(title = "Significant CpGs TR200", subtitle = "1853 CpGs for which we have annotated genes", x = "Mean difference in methylation beta values (day 20 - day 7)", y = "Fold change in RNAseq counts (day 20 - day 7)" )
+##dev.off()
+
+##png("TRP200.sigannoCpGs.FCMDb.#png", width = 2000, height = 1200, res = 150)
+ggplot(FCMD, aes(Mean.diff.betas, log2FoldChange)) + 
+  geom_point()+
+  facet_grid(~ Group)+
+  theme_minimal() +
+  labs(title = "Significant CpGs TR200", subtitle = "1853 CpGs for which we have annotated genes", x = "Mean difference in methylation beta values (day 20 - day 7)", y = "Fold change in RNAseq counts (day 20 - day 7)" )
+##dev.off()
+
+##png("TRP200.sigannoCpGs.FCMDc.#png", width = 2000, height = 1200, res = 150) 
+ggplot(FCMD, aes(Mean.diff.betas, log2FoldChange)) + 
+  stat_density_2d(aes(fill = ..level..), n = 300, geom = "polygon")+
+  facet_grid(~ Group) + 
+  theme_minimal() +
+  labs(title = "Significant CpGs TR200", subtitle = "1853 CpGs for which we have annotated genes", x = "Mean difference in methylation beta values (day 20 - day 7)", y = "Fold change in RNAseq counts (day 20 - day 7)" )
+##dev.off()
+
+##png("TRP200.sigannoCpGs.FCMDd.#png", width = 2000, height = 1200, res = 150) 
+ggplot(FCMD, aes(Mean.diff.betas, log2FoldChange)) + 
+  stat_density_2d(aes(fill = ..level..), n = 300, geom = "polygon")+
+  geom_point(alpha = 0.2, size = 0.5)+
+  facet_grid(~ Group) + 
+  theme_minimal() +
+  theme(legend.position = "none")+
+  labs(title = "Significant CpGs TR200", subtitle = "1853 CpGs for which we have annotated genes", x = "Mean difference in methylation beta values (day 20 - day 7)", y = "Fold change in RNAseq counts (day 20 - day 7)" )
+##dev.off()
+```
+
+
+
+```{r Annotation of ensembl#}
+library(biomaRt)
+
+#biomartHuman = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+#listFilters(biomartHuman)
+#listAttributes(biomartHuman)
+#myannot = getBM(attributes = c("external_gene_name", "ensembl_gene_id"),
+#                filters = "ensembl_gene_id", values=rownames(counts), 
+#                mart=biomartHuman)
+
+#save(myannot, file = "/Users/Mari/Dropbox/PhD/Paracetamol/Integration/myannot.RData")
+
+load("/Users/Mari/Dropbox/PhD/Paracetamol/Integration/myannot.RData")
+
+myannot$Id = myannot$ensembl_gene_id
+
+
+SigGenesTR100$Id = rownames(SigGenesTR100)
+SigGenesTR100 = as.data.frame(SigGenesTR100)
+SigGenesTR100 = merge(SigGenesTR100, myannot, by = "Id", all.x = TRUE)
+write.table(SigGenesTR100, "SigGenesTR100.txt")
+
+SigGenesTR200$Id = rownames(SigGenesTR200)
+SigGenesTR200 = as.data.frame(SigGenesTR200)
+SigGenesTR200 = merge(SigGenesTR200, myannot, by = "Id", all.x = TRUE)
+write.table(SigGenesTR200, "SigGenesTR200.txt")
+
+```
+
+
+#Plot DNAm change and GE change in matching samples
+```{r XY plots selected overlapping DM-DE genes point/rep}
+normcounts.df$Id = rownames(normcounts.df)
+normcounts.df.annot = merge(normcounts.df, myannot, by = "Id")
+match= int_design$Sample_Name[1:24]
+
+#Prepare betas df
+betas_D7D20_match = betas[,match]
+betas_D7D20_match_df = as.data.frame(betas_D7D20_match) #gjør om matrix til data frame
+betas_D7D20_match_df$cgid = rownames(betas_D7D20_match_df)
+betas_D7D20_match_df = merge(betas_D7D20_match_df, uniqueGenes, by = "cgid")
+
+
+#Prepare exp df
+normcounts_D7D20_match = normcounts.df[,match]
+normcounts_D7D20_match$ensembl_gene_id = rownames(normcounts_D7D20_match)
+normcounts_D7D20_match = merge(normcounts_D7D20_match, myannot, by= "ensembl_gene_id")
+normcounts_D7D20_match = normcounts_D7D20_match[,1:26]
+
+
+#Mean diff
+betas_D7D20_match_df <- betas_D7D20_match_df %>% dplyr::rename(D7ctrlA = "4-sc1-D7-ctrl-A",
+                                                       D7ctrlB = "5-sc2-D7-ctrl-A",
+                                                       D7ctrlC = "20-sc1-D7-ctrl-B",
+                                                       D7ctrlD = "248-D7-CTRL",
+                                                        D7P100A = "6-sc1-D7-P100-A", 
+                                                        D7P100B = "7-sc2-D7-P100-A",
+                                                        D7P100C  = "21-sc1-D7-P100-B",
+                                                        D7P100D = "22-sc2-D7-P100-B",
+                                                        D7P200A = "8-sc1-D7-P200-A", 
+                                                        D7P200B = "9-sc2-D7-P200-A",
+                                                        D7P200C  = "23-sc1-D7-P200-B",
+                                                        D7P200D = "24-sc2-D7-P200-B",
+                                                        D20ctrlA = "12-sc1-D20-ctrl-A",
+                                                       D20ctrlB = "13-sc2-D20-ctrl-A",
+                                                       D20ctrlC = "28-sc1-D20-ctrl-B",
+                                                       D20ctrlD = "29-sc2-D20-ctrl-B",
+                                                        D20P100A = "14-sc1-D20-P100-A", 
+                                                        D20P100B = "15-sc2-D20-P100-A",
+                                                        D20P100C  = "30-sc1-D20-P100-B",
+                                                        D20P100D = "31-sc2-D20-P100-B",
+                                                        D20P200A = "16-sc1-D20-P200-A", 
+                                                        D20P200B = "17-sc2-D20-P200-A",
+                                                        D20P200C  = "32-sc1-D20-P200-B",
+                                                        D20P200D = "33-sc2-D20-P200-B")
+
+mean_diff = betas_D7D20_match_df %>% mutate(d7_P100_Ctrl1 = D7P100A - D7ctrlA, 
+                                            d7_P100_Ctrl2 = D7P100B - D7ctrlB, 
+                                            d7_P100_Ctrl3 =  D7P100C - D7ctrlC, 
+                                            d7_P100_Ctrl4 =  D7P100D- D7ctrlD, 
+                                            d7_P200_Ctrl1 =  D7P200A - D7ctrlA,
+                                            d7_P200_Ctrl2 = D7P200B - D7ctrlB,
+                                            d7_P200_Ctrl3 = D7P200C - D7ctrlC,
+                                            d7_P200_Ctrl4 = D7P200D - D7ctrlD,
+                                            d20_P100_Ctrl1 = D20P100A - D20ctrlB, 
+                                            d20_P100_Ctrl2 = D20P100B- D20ctrlA, 
+                                            d20_P100_Ctrl3 =  D20P100C - D20ctrlD, 
+                                            d20_P100_Ctrl4 = D20P100D - D20ctrlC, 
+                                            d20_P200_Ctrl1 = D20P200A - D20ctrlA,
+                                            d20_P200_Ctrl2 = D20P200B - D20ctrlB,
+                                            d20_P200_Ctrl3 = D20P200C - D20ctrlC,
+                                            d20_P200_Ctrl4 = D20P200D - D20ctrlD) 
+mean_diff = mean_diff[,c(1,26:42)]
+
+#Fold change exp
+
+normcounts_D7D20_match <-normcounts_D7D20_match %>% dplyr::rename(D7ctrlA = "4-sc1-D7-ctrl-A",
+                                                       D7ctrlB = "5-sc2-D7-ctrl-A",
+                                                       D7ctrlC = "20-sc1-D7-ctrl-B",
+                                                       D7ctrlD = "248-D7-CTRL",
+                                                        D7P100A = "6-sc1-D7-P100-A", 
+                                                        D7P100B = "7-sc2-D7-P100-A",
+                                                        D7P100C  = "21-sc1-D7-P100-B",
+                                                        D7P100D = "22-sc2-D7-P100-B",
+                                                        D7P200A = "8-sc1-D7-P200-A", 
+                                                        D7P200B = "9-sc2-D7-P200-A",
+                                                        D7P200C  = "23-sc1-D7-P200-B",
+                                                        D7P200D = "24-sc2-D7-P200-B",
+                                                        D20ctrlA = "12-sc1-D20-ctrl-A",
+                                                       D20ctrlB = "13-sc2-D20-ctrl-A",
+                                                       D20ctrlC = "28-sc1-D20-ctrl-B",
+                                                       D20ctrlD = "29-sc2-D20-ctrl-B",
+                                                        D20P100A = "14-sc1-D20-P100-A", 
+                                                        D20P100B = "15-sc2-D20-P100-A",
+                                                        D20P100C  = "30-sc1-D20-P100-B",
+                                                        D20P100D = "31-sc2-D20-P100-B",
+                                                        D20P200A = "16-sc1-D20-P200-A", 
+                                                        D20P200B = "17-sc2-D20-P200-A",
+                                                        D20P200C  = "32-sc1-D20-P200-B",
+                                                        D20P200D = "33-sc2-D20-P200-B")
+
+
+fold_change = normcounts_D7D20_match %>% mutate(d7_P100_Ctrl1 = log2(D7P100A) - log2(D7ctrlA), 
+                                            d7_P100_Ctrl2 = log2(D7P100B) - log2(D7ctrlB), 
+                                            d7_P100_Ctrl3 =  log2(D7P100C) - log2(D7ctrlC), 
+                                            d7_P100_Ctrl4 =  log2(D7P100D)- log2(D7ctrlD), 
+                                            d7_P200_Ctrl1 =  log2(D7P200A) - log2(D7ctrlA),
+                                            d7_P200_Ctrl2 = log2(D7P200B) - log2(D7ctrlB),
+                                            d7_P200_Ctrl3 = log2(D7P200C) - log2(D7ctrlC),
+                                            d7_P200_Ctrl4 = log2(D7P200D) - log2(D7ctrlD),
+                                            d20_P100_Ctrl1 = log2(D20P100A) - log2(D20ctrlB), 
+                                            d20_P100_Ctrl2 = log2(D20P100B)- log2(D20ctrlA), 
+                                            d20_P100_Ctrl3 =  log2(D20P100C) - log2(D20ctrlD), 
+                                            d20_P100_Ctrl4 = log2(D20P100D) - log2(D20ctrlC), 
+                                            d20_P200_Ctrl1 = log2(D20P200A) - log2(D20ctrlA),
+                                            d20_P200_Ctrl2 = log2(D20P200B) - log2(D20ctrlB),
+                                            d20_P200_Ctrl3 = log2(D20P200C) - log2(D20ctrlC),
+                                            d20_P200_Ctrl4 = log2(D20P200D) - log2(D20ctrlD))
+
+fold_change = fold_change[,c(1,26:42)]
+
+#fold_change = cbind(fold_change$ensembl_gene_id,fold_change$external_gene_name, #log2(abs(fold_change[,3:18]))*(sign(fold_change[,3:18])))
+
+
+
+#Average beta/exp GRIK3
+fcGRIK3 = fold_change %>% dplyr::filter(external_gene_name == "GRIK3")
+fcGRIK3 = fcGRIK3 %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg03500327 = mean_diff %>% dplyr::filter(cgid == "cg03500327")
+mdiff_cg03500327 = mdiff_cg03500327 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+GRIK3d = merge(fcGRIK3,mdiff_cg03500327, by =c("comp","external_gene_name" ))   #Merge
+GRIK3d$Day = rep(c("20", "7"), each = 8)
+GRIK3d$Day = factor(GRIK3d$Day, levels = c("7", "20"))
+GRIK3d$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+GRIK3d$group  =factor(GRIK3d$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+GRIK3d$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(GRIK3d, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "GRIK3:cg03500327", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("GRIK3_meandiff_fcGE_mdDNAm.pdf"),width=8, height=5,paper='special')
+dev.off()
+
+ggplot(GRIK3d, aes(y = fc, x = b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "GRIK3:cg03500327", y = "GE Fold change", x = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("GRIK3_meandiff_fcGE_mdDNAmB.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+GRIK3d = GRIK3d %>% mutate(diff = b_mdiff - fc)
+
+ggplot(GRIK3d, aes(group, diff))+
+  geom_point(aes(fill = group, col = group, shape = Day), size = 3)+
+  scale_fill_viridis_d()+
+  scale_color_viridis_d()+
+  #scale_fill_brewer(palette = 1) +
+  #scale_color_brewer(palette = 1) +
+  scale_shape_manual(values = c(21,22))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_vline(xintercept = 0) + geom_hline(yintercept = 0) + 
+ labs(title = "GRIK3:cg03500327", y = "Mean difference in DNAm - GE fold change", x = "Comparison")  + theme_few()
+dev.copy(pdf,paste0("GRIK3_xyfacet_fcGE_mdDNAmA.pdf"), width=7, height=6, paper='special')
+dev.off()
+
+
+ggplot(GRIK3d, aes(Para, diff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = group, col = group, shape = Day), size = 3)+
+  scale_fill_viridis_d()+
+  scale_color_viridis_d()+
+  scale_shape_manual(values = c(21,22))+
+  geom_vline(xintercept = 0) + geom_hline(yintercept = 0) + 
+ labs(title = "GRIK3:cg03500327", y = "Mean difference in DNAm - GE fold change", x = "Comparison")  + theme_few()
+dev.copy(pdf,paste0("GRIK3_delta_fcGE_mdDNAm.pdf"), width=7, height=6, paper='special')
+dev.off()
+
+
+#-----GRIK----cg20779373
+#fcGRIK3 = fold_change %>% dplyr::filter(external_gene_name == "GRIK3")
+#fcGRIK3 = fcGRIK3 %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg20779373 = mean_diff %>% dplyr::filter(cgid == "cg20779373")
+mdiff_cg20779373 = mdiff_cg20779373 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+GRIK3e = merge(fcGRIK3,mdiff_cg20779373, by =c("comp","external_gene_name" ))   #Merge
+GRIK3e$Day = rep(c("20", "7"), each = 8)
+GRIK3e$Day = factor(GRIK3e$Day, levels = c("7", "20"))
+GRIK3e$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+GRIK3e$group  =factor(GRIK3e$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+GRIK3e$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(GRIK3e, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "GRIK3:cg20779373", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("GRIK3cg20779373_meandiff_fcGE_mdDNAmB.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+annoEPIC["cg20779373",]
+annoEPIC["cg03500327",]
+
+```
+
+```{r pax7}
+
+#-----PAX7----cg14159531
+fcPAX7 = fold_change %>% dplyr::filter(external_gene_name == "PAX7")
+fcPAX7 = fcPAX7 %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg14159531 = mean_diff %>% dplyr::filter(cgid == "cg14159531")
+mdiff_cg14159531 = mdiff_cg14159531 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+PAX7a = merge(fcPAX7,mdiff_cg14159531, by =c("comp","external_gene_name" ))   #Merge
+PAX7a$Day = rep(c("20", "7"), each = 8)
+PAX7a$Day = factor(PAX7a$Day, levels = c("7", "20"))
+PAX7a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+PAX7a$group  =factor(PAX7a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+PAX7a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(PAX7a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "PAX7:cg14159531", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("PAX7cg14159531_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+#---
+mdiff_cg09791440 = mean_diff %>% dplyr::filter(cgid == "cg09791440")
+mdiff_cg09791440 = mdiff_cg09791440 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+PAX7a = merge(fcPAX7,mdiff_cg09791440, by =c("comp","external_gene_name" ))   #Merge
+PAX7a$Day = rep(c("20", "7"), each = 8)
+PAX7a$Day = factor(PAX7a$Day, levels = c("7", "20"))
+PAX7a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+PAX7a$group  =factor(PAX7a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+PAX7a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(PAX7a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "PAX7:cg09791440", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("PAX7cg09791440_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+annoEPIC["cg14159531",]
+annoEPIC["cg09791440",]
+```
+```{r CDH2}
+#-----CDH2----cg24369285
+fcCDH2 = fold_change %>% dplyr::filter(external_gene_name == "CDH2")
+fcCDH2 = fcCDH2 %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg24369285 = mean_diff %>% dplyr::filter(cgid == "cg24369285")
+mdiff_cg24369285 = mdiff_cg24369285 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+CDH2a = merge(fcCDH2,mdiff_cg24369285, by =c("comp","external_gene_name" ))   #Merge
+CDH2a$Day = rep(c("20", "7"), each = 8)
+CDH2a$Day = factor(CDH2a$Day, levels = c("7", "20"))
+CDH2a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+CDH2a$group  =factor(CDH2a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+CDH2a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(CDH2a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "CDH2:cg24369285", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("CDH2cg24369285_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+#-----CDH2----cg19548511
+mdiff_cg19548511 = mean_diff %>% dplyr::filter(cgid == "cg19548511")
+mdiff_cg19548511 = mdiff_cg19548511 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+CDH2a = merge(fcCDH2,mdiff_cg19548511, by =c("comp","external_gene_name" ))   #Merge
+CDH2a$Day = rep(c("20", "7"), each = 8)
+CDH2a$Day = factor(CDH2a$Day, levels = c("7", "20"))
+CDH2a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+CDH2a$group  =factor(CDH2a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+CDH2a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(CDH2a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "CDH2:cg19548511", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("CDH2cg19548511_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+#-----CDH2----cg16928173
+mdiff_cg16928173 = mean_diff %>% dplyr::filter(cgid == "cg16928173")
+mdiff_cg16928173 = mdiff_cg16928173 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+CDH2a = merge(fcCDH2,mdiff_cg16928173, by =c("comp","external_gene_name" ))   #Merge
+CDH2a$Day = rep(c("20", "7"), each = 8)
+CDH2a$Day = factor(CDH2a$Day, levels = c("7", "20"))
+CDH2a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+CDH2a$group  =factor(CDH2a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+CDH2a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(CDH2a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "CDH2:cg16928173", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("CDH2cg16928173_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+annoEPIC["cg24369285",]
+annoEPIC["cg19548511",]
+annoEPIC["cg16928173",]
+```
+```{r CACNA1D}
+
+#-----CACNA1D----cg19033906
+fcCACNA1D = fold_change %>% dplyr::filter(external_gene_name == "CACNA1D")
+fcCACNA1D = fcCACNA1D %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg19033906 = mean_diff %>% dplyr::filter(cgid == "cg19033906")
+mdiff_cg19033906 = mdiff_cg19033906 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+CACNA1Da = merge(fcCACNA1D,mdiff_cg19033906, by =c("comp","external_gene_name" ))   #Merge
+CACNA1Da$Day = rep(c("20", "7"), each = 8)
+CACNA1Da$Day = factor(CACNA1Da$Day, levels = c("7", "20"))
+CACNA1Da$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+CACNA1Da$group  =factor(CACNA1Da$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+CACNA1Da$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(CACNA1Da, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "CACNA1D:cg19033906", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("CACNA1Dcg19033906_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+annoEPIC["cg19033906",]
+
+```
+
+```{r WNT7B}
+#-----WNT7B----cg22413388
+fcWNT7B = fold_change %>% dplyr::filter(external_gene_name == "WNT7B")
+fcWNT7B = fcWNT7B %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg22413388 = mean_diff %>% dplyr::filter(cgid == "cg22413388")
+mdiff_cg22413388 = mdiff_cg22413388 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+WNT7Ba = merge(fcWNT7B,mdiff_cg22413388, by =c("comp","external_gene_name" ))   #Merge
+WNT7Ba$Day = rep(c("20", "7"), each = 8)
+WNT7Ba$Day = factor(WNT7Ba$Day, levels = c("7", "20"))
+WNT7Ba$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+WNT7Ba$group  =factor(WNT7Ba$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+WNT7Ba$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(WNT7Ba, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "WNT7B:cg22413388", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("WNT7Bcg22413388_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+
+#-----WNT7B----cg04216845
+mdiff_cg04216845 = mean_diff %>% dplyr::filter(cgid == "cg04216845")
+mdiff_cg04216845 = mdiff_cg04216845 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+WNT7Ba = merge(fcWNT7B,mdiff_cg04216845, by =c("comp","external_gene_name" ))   #Merge
+WNT7Ba$Day = rep(c("20", "7"), each = 8)
+WNT7Ba$Day = factor(WNT7Ba$Day, levels = c("7", "20"))
+WNT7Ba$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+WNT7Ba$group  =factor(WNT7Ba$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+WNT7Ba$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(WNT7Ba, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "WNT7B:cg04216845", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("WNT7Bcg04216845_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+annoEPIC["cg22413388",]
+annoEPIC["cg04216845",]
+```
+
+
+
+```{r GLI3}
+#-----GLI3----cg27335338
+fcGLI3 = fold_change %>% dplyr::filter(external_gene_name == "GLI3")
+fcGLI3 = fcGLI3 %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg27335338 = mean_diff %>% dplyr::filter(cgid == "cg27335338")
+mdiff_cg27335338 = mdiff_cg27335338 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+GLI3a = merge(fcGLI3,mdiff_cg27335338, by =c("comp","external_gene_name" ))   #Merge
+GLI3a$Day = rep(c("20", "7"), each = 8)
+GLI3a$Day = factor(GLI3a$Day, levels = c("7", "20"))
+GLI3a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+GLI3a$group  =factor(GLI3a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+GLI3a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(GLI3a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "GLI3:cg27335338", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("GLI3cg27335338_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+#-----GLI3----cg06200577
+mdiff_cg06200577 = mean_diff %>% dplyr::filter(cgid == "cg06200577")
+mdiff_cg06200577 = mdiff_cg06200577 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+GLI3a = merge(fcGLI3,mdiff_cg06200577, by =c("comp","external_gene_name" ))   #Merge
+GLI3a$Day = rep(c("20", "7"), each = 8)
+GLI3a$Day = factor(GLI3a$Day, levels = c("7", "20"))
+GLI3a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+GLI3a$group  =factor(GLI3a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+GLI3a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(GLI3a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "GLI3:cg06200577", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("GLI3cg06200577_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+annoEPIC["cg27335338",]
+annoEPIC["cg06200577",]
+
+```
+```{r ABAT}
+#-----ABAT----cg26662674
+fcABAT = fold_change %>% dplyr::filter(external_gene_name == "ABAT")
+fcABAT = fcABAT %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg26662674 = mean_diff %>% dplyr::filter(cgid == "cg26662674")
+mdiff_cg26662674 = mdiff_cg26662674 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+ABATa = merge(fcABAT,mdiff_cg26662674, by =c("comp","external_gene_name" ))   #Merge
+ABATa$Day = rep(c("20", "7"), each = 8)
+ABATa$Day = factor(ABATa$Day, levels = c("7", "20"))
+ABATa$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+ABATa$group  =factor(ABATa$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+ABATa$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(ABATa, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "ABAT:cg26662674", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("ABATcg26662674_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+#-----ABAT----cg08414528
+mdiff_cg08414528 = mean_diff %>% dplyr::filter(cgid == "cg08414528")
+mdiff_cg08414528 = mdiff_cg08414528 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+ABATa = merge(fcABAT,mdiff_cg08414528, by =c("comp","external_gene_name" ))   #Merge
+ABATa$Day = rep(c("20", "7"), each = 8)
+ABATa$Day = factor(ABATa$Day, levels = c("7", "20"))
+ABATa$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+ABATa$group  =factor(ABATa$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+ABATa$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(ABATa, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "ABAT:cg08414528", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("ABATcg08414528_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+#-----ABAT----cg09410453
+mdiff_cg09410453 = mean_diff %>% dplyr::filter(cgid == "cg09410453")
+mdiff_cg09410453 = mdiff_cg09410453 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+ABATa = merge(fcABAT,mdiff_cg09410453, by =c("comp","external_gene_name" ))   #Merge
+ABATa$Day = rep(c("20", "7"), each = 8)
+ABATa$Day = factor(ABATa$Day, levels = c("7", "20"))
+ABATa$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+ABATa$group  =factor(ABATa$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+ABATa$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(ABATa, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "ABAT:cg09410453", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("ABATcg09410453_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+annoEPIC["cg26662674",]
+annoEPIC["cg08414528",]
+annoEPIC["cg09410453",]
+```
+
+
+```{r MAPT}
+#-----MAPT----cg16573346
+fcMAPT = fold_change %>% dplyr::filter(external_gene_name == "MAPT")
+fcMAPT = fcMAPT %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg16573346 = mean_diff %>% dplyr::filter(cgid == "cg16573346")
+mdiff_cg16573346 = mdiff_cg16573346 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+MAPTa = merge(fcMAPT,mdiff_cg16573346, by =c("comp","external_gene_name" ))   #Merge
+MAPTa$Day = rep(c("20", "7"), each = 8)
+MAPTa$Day = factor(MAPTa$Day, levels = c("7", "20"))
+MAPTa$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+MAPTa$group  =factor(MAPTa$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+MAPTa$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(MAPTa, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "MAPT:cg16573346", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("MAPTcg16573346_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+annoEPIC["cg16573346",]
+
+
+```
+```{r ANKRD6}
+#-----ANKRD6----cg08933177
+fcANKRD6 = fold_change %>% dplyr::filter(external_gene_name == "ANKRD6")
+fcANKRD6 = fcANKRD6 %>% pivot_longer(cols =-c(ensembl_gene_id,external_gene_name), names_to = "comp", values_to = "fc") #Make long
+mdiff_cg08933177 = mean_diff %>% dplyr::filter(cgid == "cg08933177")
+mdiff_cg08933177 = mdiff_cg08933177 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+ANKRD6a = merge(fcANKRD6,mdiff_cg08933177, by =c("comp","external_gene_name" ))   #Merge
+ANKRD6a$Day = rep(c("20", "7"), each = 8)
+ANKRD6a$Day = factor(ANKRD6a$Day, levels = c("7", "20"))
+ANKRD6a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+ANKRD6a$group  =factor(ANKRD6a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+ANKRD6a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(ANKRD6a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "ANKRD6:cg08933177", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("ANKRD6cg08933177_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+#-----ANKRD6----cg03427461
+mdiff_cg03427461 = mean_diff %>% dplyr::filter(cgid == "cg03427461")
+mdiff_cg03427461 = mdiff_cg03427461 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+ANKRD6a = merge(fcANKRD6,mdiff_cg03427461, by =c("comp","external_gene_name" ))   #Merge
+ANKRD6a$Day = rep(c("20", "7"), each = 8)
+ANKRD6a$Day = factor(ANKRD6a$Day, levels = c("7", "20"))
+ANKRD6a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+ANKRD6a$group  =factor(ANKRD6a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+ANKRD6a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(ANKRD6a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "ANKRD6:cg03427461", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("ANKRD6cg03427461_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+
+#-----ANKRD6----cg13645178
+mdiff_cg13645178 = mean_diff %>% dplyr::filter(cgid == "cg13645178")
+mdiff_cg13645178 = mdiff_cg13645178 %>% pivot_longer(cols =-c(external_gene_name, cgid), names_to = "comp", values_to = "b_mdiff")#Make long
+ANKRD6a = merge(fcANKRD6,mdiff_cg13645178, by =c("comp","external_gene_name" ))   #Merge
+ANKRD6a$Day = rep(c("20", "7"), each = 8)
+ANKRD6a$Day = factor(ANKRD6a$Day, levels = c("7", "20"))
+ANKRD6a$group = rep(c("d20_CtrlvsP100", "d20_CtrlvsP200", "d7_CtrlvsP100", "d7_CtrlvsP200"), each = 4)
+ANKRD6a$group  =factor(ANKRD6a$group, levels = c( "d7_CtrlvsP100", "d7_CtrlvsP200","d20_CtrlvsP100", "d20_CtrlvsP200"))
+ANKRD6a$Para = rep(c("Ctrl vs P100", "Ctrl vs P200"), each = 4,times = 2)
+
+ggplot(ANKRD6a, aes(fc, b_mdiff))+
+  #geom_line(aes(group = Day))+
+  geom_smooth(aes(group = Day), se = FALSE, method = "glm", col = "black")+
+  geom_point(aes(fill = Para, col =Para, shape = Day), size = 5)+ 
+  #geom_point(aes(fill = comp, col = comp, shape = Day), size = 5)+ 
+  scale_shape_manual(values = c(21,22))+
+  #scale_fill_viridis_d()+
+  #scale_color_viridis_d()+
+  scale_fill_manual(values = c("#CC99FF", "#663399"))+
+  scale_color_manual(values = c("#CC99FF", "#663399"))+
+  #ylim(-1, 1) +
+  geom_vline(xintercept = 0, col = "grey") + geom_hline(yintercept = 0,  col = "grey") +
+ facet_wrap(~ Day)+
+ labs(title = "ANKRD6:cg13645178", x = "GE Fold change", y = "DNAm change")  + theme_few()
+dev.copy(pdf,paste0("ANKRD6cg13645178_meandiff_fcGE_mdDNAm.pdf"), width=8, height=5, paper='special')
+dev.off()
+
+annoEPIC["cg08933177",]
+annoEPIC["cg03427461",]
+annoEPIC["cg13645178",]
+```
+
+
+#Find number of overlapping DM genes with DE genes
+```{r Overlapping DM and DE genes}
+
+#D7 P100 vs D7 ctrl
+#sigRNAD7p100_d7ctrl #DEG
+annsigRNAD7p100_d7ctrl = merge(sigRNAD7p100_d7ctrl, myannot, by = "Id") #Annotate with external gene names
+
+sigMethD7p100_d7ctrl = sig_d7_p100_ctrl #DM CpGs
+sigMethD7p100_d7ctrl = sigMethD7p100_d7ctrl %>% dplyr::select(cgid,logFC) #Subset only fc and cgid
+annsigMethD7p100_d7ctrl = merge(sigMethD7p100_d7ctrl, uniqueGenes, by = "cgid") #annotate with external gene names
+
+length(unique(annsigMethD7p100_d7ctrl$cgid)) #Number of unique cpgs annotated to genes #237
+length(intersect(annsigRNAD7p100_d7ctrl$external_gene_name, annsigMethD7p100_d7ctrl$external_gene_name)) #number of overlapping DMG with DEG #6
+
+#sigMethD7p100_d7ctrl[which(sigMethD7p100_d7ctrl$logFC < 0),]
+
+
+#D7 P200 vs D7 ctrl
+#sigRNAD7p200_d7ctrl #DEG
+annsigRNAD7p200_d7ctrl = merge(sigRNAD7p200_d7ctrl, myannot, by = "Id") #Annotate with external gene names
+
+sigMethD7p200_d7ctrl = sig_d7_p200_ctrl #DM CpGs
+sigMethD7p200_d7ctrl = sigMethD7p200_d7ctrl %>% dplyr::select(cgid,logFC) #Subset only fc and cgid
+annsigMethD7p200_d7ctrl = merge(sigMethD7p200_d7ctrl, uniqueGenes, by = "cgid") #annotate with external gene names
+
+length(unique(annsigMethD7p200_d7ctrl$cgid)) #Number of unique cpgs annotated to genes
+length(intersect(annsigRNAD7p200_d7ctrl$external_gene_name, annsigMethD7p200_d7ctrl$external_gene_name)) #number of overlapping DMG with DEG
+
+
+#D7 P200 vs D7 P100 #0 DMGs
+#sigRNAD7p200_d7P100 #DEG
+annsigRNAD7p200_d7P100 = merge(sigRNAD7p200_d7P100, myannot, by = "Id") #Annotate with external gene names
+
+#sigMethD7p200_d7P100 = read.table("/Users/Mari/Dropbox/PhD/Paracetamol/Methylation/bulkdata/analysis/AllSamples/sig_d7_p200_p100.csv", sep = ",", header = TRUE) #DM CpGs
+#sigMethD7p200_d7P100 = sigMethD7p200_d7P100 %>% dplyr::select(cgid,logFC) #Subset only fc and cgid
+#annsigMethD7p200_d7P100 = merge(sigMethD7p200_d7P100, uniqueGenes, by = "cgid") #annotate with external gene names
+
+#length(unique(annsigMethD7p200_d7P100$cgid)) #Number of unique cpgs annotated to genes
+#length(intersect(annsigRNAD7p200_d7P100$external_gene_name, annsigMethD7p200_d7P100$external_gene_name)) #number of overlapping DMG with DEG
+
+#D20 P100 vs D20 ctrl
+#sigRNAd20p100_d20ctrl #DEG
+annsigRNAd20p100_d20ctrl = merge(sigRNAd20p100_d20ctrl, myannot, by = "Id") #Annotate with external gene names
+
+sigMethd20p100_d20ctrl = sig_d20_p100_ctrl #DM CpGs
+sigMethd20p100_d20ctrl = sigMethd20p100_d20ctrl %>% dplyr::select(cgid,logFC) #Subset only fc and cgid
+annsigMethd20p100_d20ctrl = merge(sigMethd20p100_d20ctrl, uniqueGenes, by = "cgid") #annotate with external gene names
+
+length(unique(annsigMethd20p100_d20ctrl$cgid)) #Number of unique cpgs annotated to genes
+length(intersect(annsigRNAd20p100_d20ctrl$external_gene_name, annsigMethd20p100_d20ctrl$external_gene_name)) #number of overlapping DMG with DEG
+
+
+#D20 P200 vs D20 ctrl
+#sigRNAd20p200_d20ctrl #DEG
+annsigRNAd20p200_d20ctrl = merge(sigRNAd20p200_d20ctrl, myannot, by = "Id") #Annotate with external gene names
+
+sigMethd20p200_d20ctrl = sig_d20_p200_ctrl#DM CpGs
+sigMethd20p200_d20ctrl = sigMethd20p200_d20ctrl %>% dplyr::select(cgid,logFC) #Subset only fc and cgid
+annsigMethd20p200_d20ctrl = merge(sigMethd20p200_d20ctrl, uniqueGenes, by = "cgid") #annotate with external gene names
+
+length(unique(annsigMethd20p200_d20ctrl$cgid)) #Number of unique cpgs annotated to genes
+length(intersect(annsigRNAd20p200_d20ctrl$external_gene_name, annsigMethd20p200_d20ctrl$external_gene_name)) #number of overlapping DMG with DEG
+
+
+#D20 P200 vs D20 P100
+#sigRNAd20p200_d20P100 #DEG
+annsigRNAd20p200_d20P100 = merge(sigRNAd20p200_d20P100, myannot, by = "Id") #Annotate with external gene names
+
+sigMethd20p200_d20p100 = sig_d20_p200_p100 #DM CpGs
+sigMethd20p200_d20p100 = sigMethd20p200_d20p100 %>% dplyr::select(cgid,logFC) #Subset only fc and cgid
+annsigMethd20p200_d20p100 = merge(sigMethd20p200_d20p100, uniqueGenes, by = "cgid") #annotate with external gene names
+
+length(unique(annsigMethd20p200_d20p100$cgid)) #Number of unique cpgs annotated to genes
+length(intersect(annsigRNAd20p200_d20P100$external_gene_name, annsigMethd20p200_d20p100$external_gene_name)) #number of overlapping DMG with DEG
+
+
+#TRp100
+#SigGenesTR100 #DEG
+SigGenesTR100$ensembl_gene_id = rownames(SigGenesTR100)
+SigGenesTR100 = as.data.frame(SigGenesTR100)
+SigGenesTR100ann = merge(SigGenesTR100, myannot, by = "ensembl_gene_id")
+
+#sig_TR_p100 #DM CpGs
+#sigMethTrp100 = sig_TR_p100 %>% dplyr::select(cgid,logFC) #Subset only fc and cgid
+#annsigMethTrp100 = merge(sigMethTrp100, uniqueGenes, by = "cgid") #annotate with external gene names
+
+#length(unique(annsigMethTrp100$cgid)) #Number of unique cpgs annotated to genes
+#length(intersect(resTR100sig$external_gene_name, annsigMethTrp100$external_gene_name)) #number of overlapping DMG with DEG
+
+
+#TRp200
+#SigGenesTR200 #DEG
+SigGenesTR200$ensembl_gene_id = rownames(SigGenesTR200)
+SigGenesTR200 = as.data.frame(SigGenesTR200)
+SigGenesTR200ann = merge(SigGenesTR200, myannot, by = "ensembl_gene_id")
+
+#sig_TR_p200 #DM CpGs
+sigMethTrp200 = sig_TR_p200 %>% dplyr::select(cgid,logFC) #Subset only fc and cgid
+annsigMethTrp200 = merge(sigMethTrp200, uniqueGenes, by = "cgid") #annotate with external gene names
+
+length(unique(annsigMethTrp200$cgid)) #Number of unique cpgs annotated to genes
+length(intersect(SigGenesTR200ann$external_gene_name, annsigMethTrp200$external_gene_name)) #number of overlapping DMG with DEG
+
+TRp200_DMDEol = intersect(SigGenesTR200ann$external_gene_name, annsigMethTrp200$external_gene_name)
+write.table(TRp200_DMDEol, "TRp200_overlap_DEGs_DMGs.txt")
+
+
+TRP100P200_DMol = intersect(TRp200_DMDEol, SigGenesTR100ann$external_gene_name)
+write.table(TRP100P200_DMol, "TRp200_overlap_DEGs_DMGs_and_TRP100DEGsol.txt")
+
+```
+
+
+```{r top genes for comparison with sc-seq}
+#Find top genes for comparison with sc-seq
+
+TRp100genes = resTR100sig
+TRp100genes = subset(TRp100genes, select = c("ensembl_gene_id", "log2FoldChange", "padj"))
+TRp100genes = TRp100genes %>% mutate(comparison = "TimeResponse-P100")
+
+TRp200genes = resTR200sig[1:200,]
+TRp200genes = subset(TRp200genes, select = c("X", "log2FoldChange", "padj"))
+TRp200genes = TRp200genes %>% mutate(comparison = "TimeResponse-P200")
+colnames(TRp200genes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D7p100_d7ctrlgenes = sigRNAD7p100_d7ctrl
+D7p100_d7ctrlgenes = subset(D7p100_d7ctrlgenes, select = c("Id", "log2FoldChange", "padj"))
+D7p100_d7ctrlgenes = D7p100_d7ctrlgenes %>% mutate(comparison = "D7p100_d7ctrl")
+colnames(D7p100_d7ctrlgenes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D7p200_d7ctrlgenes = sigRNAD7p200_d7ctrl[1:200,]
+D7p200_d7ctrlgenes = subset(D7p200_d7ctrlgenes, select = c("Id", "log2FoldChange", "padj"))
+D7p200_d7ctrlgenes = D7p200_d7ctrlgenes %>% mutate(comparison = "D7p200_d7ctrl")
+colnames(D7p200_d7ctrlgenes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D7p200_d7p100genes = sigRNAD7p200_d7P100
+D7p200_d7p100genes = subset(D7p200_d7p100genes, select = c("Id", "log2FoldChange", "padj"))
+D7p200_d7p100genes = D7p200_d7p100genes %>% mutate(comparison = "D7p200_d7p100")
+colnames(D7p200_d7p100genes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D20p100_d20ctrlgenes = sigRNAd20p100_d20ctrl[1:200,]
+D20p100_d20ctrlgenes = subset(D20p100_d20ctrlgenes, select = c("Id", "log2FoldChange", "padj"))
+D20p100_d20ctrlgenes = D20p100_d20ctrlgenes %>% mutate(comparison = "D20p100_d20ctrl")
+colnames(D20p100_d20ctrlgenes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D20p200_d20ctrlgenes = sigRNAd20p200_d20ctrl[1:200,]
+D20p200_d20ctrlgenes = subset(D20p200_d20ctrlgenes, select = c("Id", "log2FoldChange", "padj"))
+D20p200_d20ctrlgenes = D20p200_d20ctrlgenes %>% mutate(comparison = "D20p200_d20ctrl")
+colnames(D20p200_d20ctrlgenes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D20p200_d20p100genes = sigRNAd20p200_d20P100[1:200,]
+D20p200_d20p100genes = subset(D20p200_d20p100genes, select = c("Id", "log2FoldChange", "padj"))
+D20p200_d20p100genes = D20p200_d20p100genes %>% mutate(comparison = "D20p200_d20p100")
+colnames(D20p200_d20p100genes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+topGenesParacet = rbind(TRp100genes,TRp200genes, D7p100_d7ctrlgenes, D7p200_d7ctrlgenes, D7p200_d7p100genes, D20p100_d20ctrlgenes, D20p200_d20ctrlgenes, D20p200_d20p100genes )
+topGenesParacet = topGenesParacet[!duplicated(topGenesParacet$ensembl_gene_id),]
+colnames(myannot)[2] = "ensembl_gene_id"
+topGenesParacet = merge(topGenesParacet, myannot, by = "ensembl_gene_id")
+topGenesParacet = topGenesParacet[order(topGenesParacet$padj),]
+
+#write.table(topGenesParacet, file = "topGenesParacet.txt", sep = "\t")
+
+##TOP 50 for Volcanoplot annotation
+TRp100genes = resTR100sig[1:50,]
+TRp100genes = subset(TRp100genes, select = c("ensembl_gene_id", "log2FoldChange", "padj"))
+TRp100genes = TRp100genes %>% mutate(comparison = "TimeResponse-P100")
+
+TRp200genes = resTR200sig[1:50,]
+TRp200genes = subset(TRp200genes, select = c("X", "log2FoldChange", "padj"))
+TRp200genes = TRp200genes %>% mutate(comparison = "TimeResponse-P200")
+colnames(TRp200genes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D7p100_d7ctrlgenes = sigRNAD7p100_d7ctrl[1:50,]
+D7p100_d7ctrlgenes = subset(D7p100_d7ctrlgenes, select = c("Id", "log2FoldChange", "padj"))
+D7p100_d7ctrlgenes = D7p100_d7ctrlgenes %>% mutate(comparison = "D7p100_d7ctrl")
+colnames(D7p100_d7ctrlgenes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D7p200_d7ctrlgenes = sigRNAD7p200_d7ctrl[1:50,]
+D7p200_d7ctrlgenes = subset(D7p200_d7ctrlgenes, select = c("Id", "log2FoldChange", "padj"))
+D7p200_d7ctrlgenes = D7p200_d7ctrlgenes %>% mutate(comparison = "D7p200_d7ctrl")
+colnames(D7p200_d7ctrlgenes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D7p200_d7p100genes = sigRNAD7p200_d7P100
+D7p200_d7p100genes = subset(D7p200_d7p100genes, select = c("Id", "log2FoldChange", "padj"))
+D7p200_d7p100genes = D7p200_d7p100genes %>% mutate(comparison = "D7p200_d7p100")
+colnames(D7p200_d7p100genes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D20p100_d20ctrlgenes = sigRNAd20p100_d20ctrl[1:50,]
+D20p100_d20ctrlgenes = subset(D20p100_d20ctrlgenes, select = c("Id", "log2FoldChange", "padj"))
+D20p100_d20ctrlgenes = D20p100_d20ctrlgenes %>% mutate(comparison = "D20p100_d20ctrl")
+colnames(D20p100_d20ctrlgenes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D20p200_d20ctrlgenes = sigRNAd20p200_d20ctrl[1:50,]
+D20p200_d20ctrlgenes = subset(D20p200_d20ctrlgenes, select = c("Id", "log2FoldChange", "padj"))
+D20p200_d20ctrlgenes = D20p200_d20ctrlgenes %>% mutate(comparison = "D20p200_d20ctrl")
+colnames(D20p200_d20ctrlgenes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+D20p200_d20p100genes = sigRNAd20p200_d20P100[1:50,]
+D20p200_d20p100genes = subset(D20p200_d20p100genes, select = c("Id", "log2FoldChange", "padj"))
+D20p200_d20p100genes = D20p200_d20p100genes %>% mutate(comparison = "D20p200_d20p100")
+colnames(D20p200_d20p100genes) = c("ensembl_gene_id", "log2FoldChange", "padj", "comparison")
+
+topGenesParacet2 = rbind(TRp100genes,TRp200genes, D7p100_d7ctrlgenes, D7p200_d7ctrlgenes, D7p200_d7p100genes, D20p100_d20ctrlgenes, D20p200_d20ctrlgenes, D20p200_d20p100genes )
+#topGenesParacet = topGenesParacet[!duplicated(topGenesParacet$ensembl_gene_id),]
+colnames(myannot)[2] = "ensembl_gene_id"
+topGenesParacet2 = merge(topGenesParacet2, myannot, by = "ensembl_gene_id")
+topGenesParacet2 = topGenesParacet2[order(topGenesParacet2$padj),]
+topGenesParacet2 = topGenesParacet2[order(topGenesParacet2$comparison),]
+
+write.table(topGenesParacet2, file = "top50GenesParacet.txt", sep = "\t")
+```
+
+```{r scRNA overlap}
+#D7_p100ctrl
+D7_p100ctrl_scRNA = read_csv("DE_D7_P100vsCtrl.csv", col_names = TRUE)
+table(D7_p100ctrl_scRNA$avg_log2FC > 0)
+D7_p100ctrl_bulkRNA = read.table("sigRNAD7p100_d7ctrl.txt")
+
+length(unique(D7_p100ctrl_bulkRNA$external_gene_name))
+length(unique(D7_p100ctrl_scRNA$...1))
+
+i =intersect(unique(D7_p100ctrl_scRNA$...1),unique(D7_p100ctrl_bulkRNA$external_gene_name))
+
+length(i) #3
+length(i)/length(unique(D7_p100ctrl_scRNA$...1))*100 #1% overlap
+
+setdiff(D7_p100ctrl_scRNA$...1, i)
+
+
+#D7_p200ctrl
+D7_p200ctrl_scRNA = read_csv("DE_D7_P200vsCtrl.csv", col_names = TRUE)
+table(D7_p200ctrl_scRNA$avg_log2FC > 0)
+D7_p200ctrl_bulkRNA = read.table("sigRNAD7p200_d7ctrl.txt")
+
+length(unique(D7_p200ctrl_bulkRNA$external_gene_name))
+length(unique(D7_p200ctrl_scRNA$...1))
+
+i =intersect(unique(D7_p200ctrl_scRNA$...1),unique(D7_p200ctrl_bulkRNA$external_gene_name))
+length(i) #167
+length(i)/length(unique(D7_p200ctrl_scRNA$...1))*100 #21% overlap
+
+setdiff(D7_p200ctrl_scRNA$...1, i)
+
+#D7_P200vsP100
+D7_P200vsP100scRNA = read_csv("DE_D7_P200vsP100.csv", col_names = TRUE)
+table(D7_P200vsP100scRNA$avg_log2FC > 0)
+D7_p200vsP100_bulkRNA = read.table("sigRNAD7p200_d7p100.txt")
+
+length(unique(D7_p200vsP100_bulkRNA$external_gene_name))
+length(unique(D7_P200vsP100scRNA$...1))
+
+i =intersect(unique(D7_P200vsP100scRNA$...1),unique(D7_p200vsP100_bulkRNA$external_gene_name))
+
+length(i) #
+length(i)/length(unique(D7_P200vsP100scRNA$...1))*100 #0% overlap
+
+setdiff(D7_P200vsP100scRNA$...1, i)
+
+#D20_P100vsCtrl
+D20_P100vsCtrl_scRNA = read_csv("DE_D20_P100vsCtrl.csv", col_names = TRUE)
+table(D20_P100vsCtrl_scRNA$avg_log2FC > 0)
+D20_P100vsCtrl_bulkRNA = read.table("sigRNAd20p100_d20ctrl.txt")
+
+length(unique(D20_P100vsCtrl_bulkRNA$external_gene_name))
+length(unique(D20_P100vsCtrl_scRNA$...1))
+
+i =intersect(unique(D20_P100vsCtrl_scRNA$...1),unique(D20_P100vsCtrl_bulkRNA$external_gene_name))
+
+length(i) # 24
+length(i)/length(unique(D20_P100vsCtrl_scRNA$...1))*100 #3% overlap
+
+setdiff(D20_P100vsCtrl_scRNA$...1, i)
+
+#D20_P200vsCtrl
+D20_P200vsCtrl_scRNA = read_csv("DE_D20_P200vsCtrl.csv", col_names = TRUE)
+table(D20_P200vsCtrl_scRNA$avg_log2FC > 0)
+D20_P200vsCtrl_bulkRNA = read.table("sigRNAd20p200_d20ctrl.txt")
+
+length(unique(D20_P200vsCtrl_bulkRNA$external_gene_name))
+length(unique(D20_P200vsCtrl_scRNA$...1))
+
+i =intersect(unique(D20_P200vsCtrl_scRNA$...1),unique(D20_P200vsCtrl_bulkRNA$external_gene_name))
+
+length(i) # 257
+length(i)/length(unique(D20_P200vsCtrl_scRNA$...1))*100 #27% overlap
+
+setdiff(D20_P200vsCtrl_scRNA$...1, i)
+
+#D20_P200vsP100
+D20_P200vsP100_scRNA = read_csv("DE_D20_P200vsP100.csv", col_names = TRUE)
+table(D20_P200vsP100_scRNA$avg_log2FC > 0)
+D20_P200vsP100_bulkRNA = read.table("sigRNAd20p200_d20p100.txt")
+
+length(unique(D20_P200vsP100_bulkRNA$external_gene_name))
+length(unique(D20_P200vsP100_scRNA$...1))
+
+i =intersect(unique(D20_P200vsP100_scRNA$...1),unique(D20_P200vsP100_bulkRNA$external_gene_name))
+
+length(i) # 257
+length(i)/length(unique(D20_P200vsP100_scRNA$...1))*100 #27% overlap
+
+setdiff(D20_P200vsP100_scRNA$...1, i)
+```
+

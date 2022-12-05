@@ -1,0 +1,2180 @@
+---
+title: "DEseq2-paracetamol"
+author: "MS"
+date: "8/11/2020"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, root.dir ="Paracetamol/RNAseq/Analysis", echo = TRUE)
+
+#rm(list=ls())  
+#BiocManager::install("tximport")
+library("tximport")
+library("readr")
+library(SARTools)
+library("DESeq2")
+library(ggplot2)
+library(tidyverse)
+library(ggthemes)
+library("ReportingTools")
+library("EnhancedVolcano")
+library(biomaRt)
+library(colorspace)
+library(gridExtra)
+#install.packages("ggpubr")
+library (viridis)
+library(pheatmap)
+
+
+cols = c('0' = '#D37295', #Day 20 P100
+'1' = '#FF9888', #Day 0 ctrl
+'2' = '#8175AA', #Day 20 P200
+'3' = '#DAB6AF',
+'4' = '#FFC966',
+'5' = '#C3CE3D', #Day 13 ctrl
+'6' = '#8CC2CA', #Day 7 P200
+'7' = '#59A14F', 
+'8' = '#CCCCCC', 
+'9' = '#008080', 
+'10' = '#C0D6E4', #Day 20 ctrl
+'11' = '#FFD700', #day 7 P100
+'12' = '#A3ACB9',
+'13' = '#F28E2B',
+'14' = '#B60A1C', #Day 7 ctrl
+'15' = '#8A494D',
+'16' = '#C8D0D9')
+
+d7d20cols = c('#B60A1C', #Day 7 ctrl,
+                     '#FFD700', #day 7 P100,
+                     '#8CC2CA', #Day 7 P200,
+                    '#C0D6E4', #Day 20 ctrl,
+                     '#D37295', #Day 20 P100
+                    '#8175AA') #Day 20 P200
+
+allCols = c("#FF9888",  "#B60A1C", "#FFD700", "#8CC2CA","#C3CE3D","#C0D6E4", "#D37295", "#8175AA")
+
+daycols = c("#FF9888", "#B60A1C", "#C3CE3D","#C0D6E4")
+```
+
+# Load data
+```{r load data}
+
+targetFile <- "design.txt"                           # path to the design/target file
+rawDir <- "Paracetamol/RNAseq/20_featureCounts" 
+varInt <- "groups"                                    # factor of interest
+condRef <- "Ctrl7"                                      # reference biological condition
+
+
+# loading target file
+target <- loadTargetFile(targetFile=targetFile, varInt=varInt, condRef=condRef, batch=NULL)
+#save(target, file = "Paracetamol/Integration/Target.RData") ##For use with MORE integration plots
+
+# loading counts
+counts <- round(loadCountData(target=target, rawDir=rawDir, featuresToRemove=NULL))
+
+```
+
+# Differential expression analysis
+```{r}
+#To get the specific concentration effect over time, subset samples to one concentration only
+#P100
+targetP100 = dplyr::filter(target, Concentration %in% c("0","100"))
+targetP100$Day = factor(targetP100$Day)
+targetP100$Concentration = factor(targetP100$Concentration, levels = c("0", "100"))
+design = as.formula(~ Concentration + Day  + Concentration:Day)
+
+#modelMAtrix = model.matrix(design, data = targetP100)
+#modelMAtrix
+keep = rownames(targetP100)
+countsP100 = counts[,keep]
+
+dds <- DESeqDataSetFromMatrix(countData = countsP100,
+                                   colData = targetP100,
+                                   design = design)
+
+ddsP100 = DESeq(dds, fitType = "parametric")
+resultsNames(ddsP100)
+
+
+#The interaction terms "Day20.Concentration100" and "Day20.Concentration200" give the difference between the Day effect (D20- D7) for a given Concentration (P100)  and the Day effect for the reference concentration (ctrl).
+#https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#interactions
+
+resTR100 = results(ddsP100, name = "Concentration100.Day20", alpha = 0.05, independentFiltering = TRUE, cooksCutoff = TRUE, pAdjustMethod ="BH")
+
+resTR100 = resTR100[order(resTR100$pvalue),] #Order results after pvalue
+summary(resTR100)
+sum(resTR100$padj < 0.05)
+write.csv(as.data.frame(resTR100), file="TRP100_results.csv")
+
+#P200
+targetP200 = dplyr::filter(target, Concentration %in% c("0","200"))
+targetP200$Day = factor(targetP200$Day)
+targetP200$Concentration = factor(targetP200$Concentration, levels = c("0", "200"))
+design = as.formula(~ Concentration + Day  + Concentration:Day)
+
+#modelMAtrix = model.matrix(design, data = targetP100)
+#modelMAtrix
+keep = rownames(targetP200)
+countsP200 = counts[,keep]
+
+dds <- DESeqDataSetFromMatrix(countData = countsP200,
+                                   colData = targetP200,
+                                   design = design)
+
+ddsP200 = DESeq(dds, fitType = "parametric")
+resultsNames(ddsP200)
+
+#TRp200
+resTR200 = results(ddsP200, name = "Concentration200.Day20", alpha = 0.05, independentFiltering = TRUE, cooksCutoff = TRUE, pAdjustMethod ="BH")
+resTR200 = resTR200[order(resTR200$pvalue),] #Order results after pvalue
+summary(resTR200)
+sum(resTR200$padj < 0.05)
+write.csv(as.data.frame(resTR200), file="TRP200_results.csv")
+
+
+#Extract normalized counts
+target$Day = factor(target$Day)
+target$Concentration = factor(target$Concentration)
+design = as.formula(~ Concentration + Day  + Concentration:Day)
+
+dds <- DESeqDataSetFromMatrix(countData = counts,
+                                   colData = target,
+                                   design = design)
+
+dds = DESeq(dds, fitType = "parametric")
+
+normCounts = counts(dds, normalized = TRUE)
+#save(normCounts, file = "Paracetamol/RNAseq/analysis/normcounts.RData")
+#write.csv(normCounts, "normCounts_paracetamol.txt")
+```
+
+
+```{r ranked lists for GSEA}
+#TR-P100
+gsea = data.frame(resTR100)
+gsea$fcsign <- sign(gsea$log2FoldChange)  # opp/nedregulert
+gsea$logP=-log10(gsea$pvalue)             # størrelsesorden på p-verdi (lav p: høy logP)
+gsea$metric = gsea$logP/gsea$fcsign           # logP med fortegn
+gsea <- gsea[order(gsea$metric, decreasing = T),]
+gsea <- gsea[!is.na(gsea$log2FoldChange),]
+gsea$ENSID = rownames(gsea)
+gsea <- gsea[!is.na(gsea$metric),]
+gsea = gsea[,c("ENSID","metric")]
+rownames(gsea) = NULL
+write.table(gsea, sep="\t",file="GSEA-tRp100.rnk", quote=F, row.names=F, col.names = F)
+
+#TR-P200
+gsea = data.frame(resTR200)
+gsea$fcsign <- sign(gsea$log2FoldChange)  # opp/nedregulert
+gsea$logP=-log10(gsea$pvalue)             # størrelsesorden på p-verdi (lav p: høy logP)
+gsea$metric = gsea$logP/gsea$fcsign           # logP med fortegn
+gsea <- gsea[order(gsea$metric, decreasing = T),]
+gsea <- gsea[!is.na(gsea$log2FoldChange),]
+gsea$ENSID = rownames(gsea)
+gsea <- gsea[!is.na(gsea$metric),]
+gsea = gsea[,c("ENSID","metric")]
+rownames(gsea) = NULL
+write.table(gsea, sep="\t",file="GSEA-tRp200.rnk", quote=F, row.names=F, col.names = F)
+
+```
+
+
+## Dispersion and MA plots
+```{r Dispersion and MA plots}
+plotDispEsts(ddsP100)
+plotDispEsts(ddsP200)
+
+DESeq2::plotMA(resTR100, ylim=c(-3,3))
+DESeq2::plotMA(resTR200, ylim=c(-3,3))
+```
+## Annotate
+```{r Annotation}
+
+biomartHuman = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+listFilters(biomartHuman)
+listAttributes(biomartHuman)
+myannot = getBM(attributes = c("external_gene_name", "ensembl_gene_id", "chromosome_name", "start_position", "end_position"),
+                filters = "ensembl_gene_id", values=rownames(counts),                 mart=biomartHuman)
+
+
+#save(myannot, file = "Paracetamol/RNAseq/Analysis/myannot.RData")
+#load("Paracetamol/RNAseq/Analysis/myannot.RData")
+head(myannot)
+
+```
+
+# Visualize DE results
+
+```{r volcano plots TR}
+#TR-P100
+resTR100df = as.data.frame(resTR100)
+resTR100df$ensembl_gene_id = rownames(resTR100df)
+resTR100df = merge(resTR100df, myannot, by = "ensembl_gene_id", all.x = TRUE)
+rownames(resTR100df) = resTR100df$ensembl_gene_id
+resTR100df =resTR100df[order(resTR100df$pvalue),]
+write.csv(resTR100df, file="TRP100_results_annotated.csv")
+  
+keyvals.colour <- ifelse(
+    resTR100df$padj >= 0.05 |  resTR100df$padj == "NA", 'grey30',
+      ifelse(resTR100df$padj < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+pdf("EnhVol_TR_P100.pdf", width = 8, height = 9)
+EnhancedVolcano(resTR100df,
+    lab = resTR100df$external_gene_name,
+    selectLab =resTR100df$external_gene_name[1:121],
+    labSize = 2,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    title = "Paracetamol 100 µM: Time response ",
+    subtitle = "121 significant genes",
+    caption = "", 
+    gridlines.minor = F,
+    gridlines.major = F)
+dev.off()
+
+#----------------------------------------------------------------------------------------------------------
+#TR-P200
+resTR200df = as.data.frame(resTR200)
+resTR200df$ensembl_gene_id = rownames(resTR200df)
+resTR200df = merge(resTR200df, myannot, by = "ensembl_gene_id", all.x = TRUE)
+rownames(resTR200df) = resTR200df$ensembl_gene_id
+resTR200df =resTR200df[order(resTR200df$pvalue),]
+write.csv(resTR200df, file="TRP200_results_annotated.csv")
+  
+keyvals.colour <- ifelse(
+    resTR200df$padj >= 0.05 |  resTR200df$padj == "NA", 'grey30',
+      ifelse(resTR200df$padj < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+pdf("EnhVol_TR_P200.pdf", width = 8, height = 9)
+EnhancedVolcano(resTR200df,
+    lab = resTR200df$external_gene_name,
+    selectLab =resTR200df$external_gene_name[1:300],
+    labSize = 2,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    title = "Paracetamol 200 µM: Time response ",
+    subtitle = "1433 significant genes",
+    caption = "",
+    gridlines.minor = F,
+    gridlines.major = F)
+dev.off()
+
+#Venn diagram
+TRp100.degs = resTR100[!is.na(resTR100$padj),]
+TRp100.degs = row.names(TRp100.degs[TRp100.degs$padj <0.05,])
+  
+TRp200.degs = resTR200[!is.na(resTR200$padj),]
+TRp200.degs = row.names(TRp200.degs[TRp200.degs$padj <0.05,])
+
+
+# Venn-diagram using the `VennDiagram` library (see below for alternative method)
+library(VennDiagram)
+# Calculate the intersection of the three sets
+deg.venn <- list('TRP100' = length(TRp100.degs), 'TRP200' = length(TRp200.degs), 'intersectP100P200' = length(intersect(TRp100.degs, TRp200.degs)))
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.pairwise.venn(deg.venn$TRP100, deg.venn$TRP200, deg.venn$intersectP100P200,
+                              category = c("TR P100", "TR P200"), 
+                              euler.d =T,
+                              scaled = T,
+                              ext.text = F,
+                              fill = c( "#B60A1C", "#8A494D"), alpha = rep(0.5, 2))
+#"#F28E2B", 
+# Actually plot the plot
+pdf("VennTR.pdf", height = 5, width = 5)
+grid.draw(venn.plot)
+dev.off()
+```
+
+# Vizualize normalized counts for significant sites
+## Calculate average normalized counts per group 
+```{r Calculate average Normocunts }
+normcounts.df = as.data.frame(normCounts)
+
+avg.nc.D7D20 = normcounts.df %>% mutate(Ctrl7 = rowMeans(normcounts.df[, rownames(dplyr::filter(target, Group == "Control_day_7"))], na.rm = TRUE), 
+                                d7P100 = rowMeans(normcounts.df[, rownames(dplyr::filter(target, Group == "100_uM_paracetamol_day_7"))], na.rm = TRUE), 
+                                d7P200 = rowMeans(normcounts.df[, rownames(dplyr::filter(target, Group == "200_uM_paracetamol_day_7"))], na.rm = TRUE),
+                                Ctrl20 = rowMeans(normcounts.df[, rownames(dplyr::filter(target, Group == "Control_day_20"))], na.rm = TRUE),
+                                d20P100 = rowMeans(normcounts.df[, rownames(dplyr::filter(target, Group == "100_uM_paracetamol_day_20"))], na.rm = TRUE),
+                                d20P200 = rowMeans(normcounts.df[, rownames(dplyr::filter(target, Group == "200_uM_paracetamol_day_20"))], na.rm = TRUE))
+
+avg.nc.D7D20 = avg.nc.D7D20[,31:36]
+
+```
+
+
+## Visualize average normalized counts per group for each signignificant gene
+```{r visualization of normcounts for significant sites}
+
+#Subset significant genes from res
+SigGenesTR100 = resTR100[which(resTR100$padj < 0.05),] 
+SigGenesTR200 = resTR200[which(resTR200$padj < 0.05),]  
+save(SigGenesTR100, SigGenesTR200, file = "DE_TR_paracet.RData")
+
+#Subset normcounts for all significant genes
+SigGenesTR100_nc = subset(avg.nc.D7D20, subset = rownames(avg.nc.D7D20) %in% rownames(SigGenesTR100))
+SigGenesTR200_nc = subset(avg.nc.D7D20, subset = rownames(avg.nc.D7D20) %in% rownames(SigGenesTR200))
+
+identical(rownames(SigGenesTR100_nc), rownames(SigGenesTR100)) #FALSE
+#Endre rekkefølgen på SigGenesTR100 slik at den blir lik SigGenesTR100_nc
+SigGenesTR100_nc = SigGenesTR100_nc[order(match(rownames(SigGenesTR100_nc), rownames(SigGenesTR100))), , drop = FALSE]
+identical(rownames(SigGenesTR100_nc), rownames(SigGenesTR100))  #TRUE
+
+identical(rownames(SigGenesTR200_nc), rownames(SigGenesTR200)) #FALSE
+#Endre rekkefølgen på SigGenesTR200 slik at den blir lik SigGenesTR200_nc
+SigGenesTR200_nc = SigGenesTR200_nc[order(match(rownames(SigGenesTR200_nc), rownames(SigGenesTR200))), , drop = FALSE]
+identical(rownames(SigGenesTR200_nc), rownames(SigGenesTR200))  #TRUE
+
+#Combine beta values with group annotation/DE results
+SigGenesTR100_nc_combined = cbind(SigGenesTR100_nc, SigGenesTR100) #combine dfs so position and betas are in same df
+SigGenesTR200_nc_combined = cbind(SigGenesTR200_nc, SigGenesTR200)
+
+SigGenesTR100_nc_combined$ensembl_gene_id = rownames(SigGenesTR100_nc_combined)
+SigGenesTR200_nc_combined$ensembl_gene_id = rownames(SigGenesTR200_nc_combined)
+
+#Merge with myannot
+SigGenesTR100_nc_combined2 = merge(SigGenesTR100_nc_combined, myannot, by = "ensembl_gene_id")
+SigGenesTR200_nc_combined2 = merge(SigGenesTR200_nc_combined, myannot, by = "ensembl_gene_id")
+
+
+#Make long df
+SigGenesTR100_nc_combined3 <- SigGenesTR100_nc_combined2 %>% pivot_longer(-c(ensembl_gene_id, baseMean, log2FoldChange,lfcSE,
+                                                                             stat, pvalue, padj, external_gene_name, chromosome_name, 
+                                                                             start_position, end_position), 
+                                                                          names_to = "groups", values_to = "avg.counts") %>% remove_rownames(.)
+
+SigGenesTR200_nc_combined3 <- SigGenesTR200_nc_combined2 %>% pivot_longer(-c(ensembl_gene_id, baseMean, log2FoldChange,lfcSE,
+                                                                             stat, pvalue, padj, external_gene_name, chromosome_name, 
+                                                                             start_position, end_position), 
+                                                                          names_to = "groups", values_to = "avg.counts") %>% remove_rownames(.)
+
+targetsub = subset(target[c(1, 7, 12, 17, 21, 25),], select = c("groups", "Day", "Concentration", "treatment"))
+
+#Combine with targets for group_identity
+joined_SigGenesTR100 <- merge(SigGenesTR100_nc_combined3, targetsub, by = "groups")
+joined_SigGenesTR200 <- merge(SigGenesTR200_nc_combined3, targetsub, by = "groups")
+
+levels(joined_SigGenesTR100$Concentration)
+levels(joined_SigGenesTR100$Day)
+
+joined_SigGenesTR100$groups = factor(joined_SigGenesTR100$groups, levels = c("Ctrl7", "d7P100", "d7P200","Ctrl20", "d20P100", "d20P200")) #Endre rekkefølgen til riktig dag
+joined_SigGenesTR200$groups = factor(joined_SigGenesTR200$groups, levels = c("Ctrl7", "d7P100", "d7P200","Ctrl20", "d20P100", "d20P200")) #Endre rekkefølgen til riktig dag
+
+
+ ggplot(joined_SigGenesTR100, aes(x = as.factor(Day), y = log(avg.counts), group =groups)) +
+  geom_boxplot(aes(fill = as.factor(Concentration))) +
+  #geom_point(aes(fill = as.factor(Concentration)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 1, alpha = 0.5)+
+  scale_fill_manual(values = c( "#99CCCC","#009999","#006666"), aesthetics = c("fill"))+
+  labs(title = "DE genes: time response to 100 uM paracetamol", x = "Day", y = "log(Average normalized counts)", fill ="Paracetamol concentration (µM)") +
+  theme_few()+
+  theme(plot.subtitle = element_text(size = 7, margin=margin(5,0,10,0), hjust = 0))
+dev.copy(pdf,paste0("SigGenes_lognormocount.TR100.pdf"), width = 10, height=7, paper='special')
+dev.off()
+
+ ggplot(joined_SigGenesTR200, aes(x = as.factor(Day), y = log(avg.counts), group =groups)) +
+  geom_boxplot(aes(fill = as.factor(Concentration))) +
+  #geom_point(aes(fill = as.factor(Concentration)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 1, alpha = 0.5)+
+  scale_fill_manual(values = c( "#99CCCC","#009999","#006666"), aesthetics = c("fill"))+
+  labs(title = "DE genes: time response to 200 uM paracetamol", x = "Day", y = "log(Average normalized counts)", fill ="Paracetamol concentration (µM)") +
+  theme_few()+
+  theme(plot.subtitle = element_text(size = 7, margin=margin(5,0,10,0), hjust = 0))
+dev.copy(pdf,paste0("SigGenes_lognormocount.TR200.pdf"), width = 10, height=7, paper='special')
+dev.off()
+
+```
+
+## Visualize fold change within treatment groups for each signignificant gene
+
+```{r visualiztion of Fold change for significant sites}
+
+#Run ned DE analysis, compare each treatment group at day 20 with it´s respective treatment group day 7. 
+design = as.formula(~ Group)
+target$Group = as.factor(target$Group)
+levels(target$Group)
+target$Group = factor(target$Group, levels = c("Control_day_7","100_uM_paracetamol_day_7","200_uM_paracetamol_day_7", "Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20")) 
+
+dds2 <- DESeqDataSetFromMatrix(countData = counts,
+                                   colData = target,
+                                   design = design)
+
+dds2 = DESeq(dds2, fitType = "parametric")
+
+#Results from each comparison
+resCtrl = results(dds2, contrast = c("Group", "Control_day_20", "Control_day_7"))
+resCtrl = resCtrl[order(resCtrl$pvalue),]
+resP100 = results(dds2, contrast = c("Group", "100_uM_paracetamol_day_20", "100_uM_paracetamol_day_7"))
+resP100 = resP100[order(resP100$pvalue),]
+resP200 = results(dds2, contrast = c("Group", "200_uM_paracetamol_day_20", "200_uM_paracetamol_day_7"))
+resP200 = resP200[order(resP200$pvalue),]
+
+
+##Subsette logfoldchange for hver gruppe av signifikante gener fra sigTR100
+ctrlFC_TR100 = resCtrl[rownames(SigGenesTR100),]
+ctrlFC_TR1002 = data.frame(ensembl_gene_id = rownames(ctrlFC_TR100), ctrlD20vsD7 = ctrlFC_TR100$log2FoldChange )
+P100PC_TR100 = resP100[rownames(SigGenesTR100),]
+P100PC_TR1002 = data.frame(ensembl_gene_id = rownames(P100PC_TR100), P100D20vsD7 = P100PC_TR100$log2FoldChange )
+P200PC_TR100 = resP200[rownames(SigGenesTR100),]
+P200PC_TR1002 = data.frame(ensembl_gene_id = rownames(P200PC_TR100), P200D20vsD7 = P200PC_TR100$log2FoldChange )
+
+TR100FC = merge(ctrlFC_TR1002, P100PC_TR1002, by = "ensembl_gene_id")
+TR100FC = merge(TR100FC, P200PC_TR1002, by = "ensembl_gene_id") #Merge til en df med tre kolonner med foldchange-data
+
+TR100FCannot = merge(TR100FC, myannot, by = "ensembl_gene_id")
+
+TR100FCannot.long <- TR100FCannot %>% pivot_longer(-c(ensembl_gene_id, external_gene_name, chromosome_name, 
+                                                                             start_position, end_position), 
+                                                                          names_to = "Group", values_to = "log2FoldChange") %>% remove_rownames(.)
+
+##Subsette logfoldchange for hver gruppe av signifikante gener fra sigTR200
+ctrlFC_TR200 = resCtrl[rownames(SigGenesTR200),]
+ctrlFC_TR2002 = data.frame(ensembl_gene_id = rownames(ctrlFC_TR200), ctrlD20vsD7 = ctrlFC_TR200$log2FoldChange )
+P100PC_TR200 = resP100[rownames(SigGenesTR200),]
+P100PC_TR2002 = data.frame(ensembl_gene_id = rownames(P100PC_TR200), P100D20vsD7 = P100PC_TR200$log2FoldChange )
+P200PC_TR200 = resP200[rownames(SigGenesTR200),]
+P200PC_TR2002 = data.frame(ensembl_gene_id = rownames(P200PC_TR200), P200D20vsD7 = P200PC_TR200$log2FoldChange )
+
+TR200FC = merge(ctrlFC_TR2002, P100PC_TR2002, by = "ensembl_gene_id")
+TR200FC = merge(TR200FC, P200PC_TR2002, by = "ensembl_gene_id")
+
+TR200FCannot = merge(TR200FC, myannot, by = "ensembl_gene_id")
+
+TR200FCannot.long <- TR200FCannot %>% pivot_longer(-c(ensembl_gene_id, external_gene_name, chromosome_name, 
+                                                                             start_position, end_position), 
+                                                                          names_to = "Group", values_to = "log2FoldChange") %>% remove_rownames(.)
+  #Plotte en boks per sammenligning for beta-verdier (y1) og en for logfc (y2), grupper på x
+
+ ggplot(TR100FCannot.long, aes(x = Group, y = log2FoldChange)) +
+  geom_boxplot(aes(fill = Group)) +
+  #geom_jitter(aes(fill = Group), pch = 21, col = "black", size = 1, alpha = 0.2)+
+  scale_fill_manual(values = c( "#99CCCC","#009999","#006666"), aesthetics = c("fill"))+
+  labs(title = "Response over time to paracetamol", subtitle = "All significant DE genes for difference in differences (D20 P100 - D7 P100)- (D20 ctrl - D7 ctrl)", 
+       x = "", y = "Fold change (day 20 - day 7)", fill ="Paracetamol concentration (µM)") +
+  scale_x_discrete(labels = c("Control", "100 µM Paracetamol", "200 µM Paracetamol"))+
+  theme_few() +
+  theme(plot.subtitle = element_text(size = 7, margin=margin(5,0,10,0), hjust = 0), legend.position = "none")
+dev.copy(pdf,paste0("SigGenes_foldChange.TR100.pdf"), width = 7, height=7, paper='special')
+dev.off()
+
+ ggplot(TR200FCannot.long, aes(x = Group, y = log2FoldChange)) +
+  geom_boxplot(aes(fill = Group)) +
+  #geom_jitter(aes(fill = Group), pch = 21, col = "black", size = 1, alpha = 0.2)+
+  scale_fill_manual(values = c( "#99CCCC","#009999","#006666"), aesthetics = c("fill"))+
+  labs(title = "Response over time to paracetamol", subtitle = "All significant DE genes for difference in differences (D20 P200 - D7 P200)- (D20 ctrl - D7 ctrl)", 
+       x = "", y = "Fold change (day 20 - day 7)", fill ="Paracetamol concentration (µM)") +
+  scale_x_discrete(labels = c("Control", "100 µM Paracetamol", "200 µM Paracetamol"))+
+  theme_few() +
+  theme(plot.subtitle = element_text(size = 7, margin=margin(5,0,10,0), hjust = 0), legend.position = "none")
+dev.copy(pdf,paste0("SigGenes_foldChange.TR200.pdf"), width = 7, height=7, paper='special')
+dev.off()
+```
+
+# Compare methylation data with RNAseq
+
+```{r Prepare data for comparisons with methylation data}
+
+##RNAseq
+resTR100df =  data.frame(ensembl_gene_id = rownames(resTR100), baseMean = resTR100$baseMean, log2FoldChange = resTR100$log2FoldChange, pvalue = resTR100$pvalue, padj = resTR100$padj)#Results from TR P100, use for Pvals and significant genes
+resTR100annot = merge(resTR100df, myannot,by = "ensembl_gene_id") #Annotated results
+
+resTR200df = data.frame(ensembl_gene_id = rownames(resTR200), baseMean = resTR200$baseMean, log2FoldChange = resTR200$log2FoldChange, pvalue = resTR200$pvalue, padj = resTR200$padj) #Results from TR P200, use for Pvals and significant genes
+resTR200annot = merge(resTR200df, myannot,by = "ensembl_gene_id")#Annotated results
+
+
+resCtrl #Results from D20 ctrl - D7 ctrl, use for finding fold change for each group
+resP100  #Results from D20 P100 - D7 P100, use for finding fold change
+resP200  #Results from D20 P200 - D7 P200, use for finding fold change
+
+#Alle logfoldchange i en annotert dataframe
+ctrlFC = data.frame(ensembl_gene_id = rownames(resCtrl), Control = resCtrl$log2FoldChange)
+p100FC = data.frame(ensembl_gene_id = rownames(resP100), p100_uM_paracetamol_day_20 = resP100$log2FoldChange)
+p200FC = data.frame(ensembl_gene_id = rownames(resP200), p200_uM_paracetamol_day_20 = resP200$log2FoldChange)
+
+FCall = merge(ctrlFC, p100FC, by = "ensembl_gene_id")
+FCall = merge(FCall, p200FC, by = "ensembl_gene_id") #Merge til en df med tre kolonner med foldchange-data
+
+allFCannot = merge(FCall, myannot, by = "ensembl_gene_id")
+
+FCall.long <- allFCannot %>% pivot_longer(-c(ensembl_gene_id, external_gene_name, chromosome_name, 
+             start_position, end_position), names_to = "Group", values_to = "log2FoldChange") %>% remove_rownames(.)
+
+
+save(resTR100annot, resTR200annot,resCtrl,resP100, resP200, counts, FCall.long, normcounts.df, avg.nc.D7D20,FCall, allFCannot,  file = "Paracetamol/RNAseq/analysis/ParacetDEresults.RData" )
+
+
+```
+
+
+
+```{r prep other comparisons for GSEA}
+myannot$Id = myannot$ensembl_gene_id
+
+setwd("Paracetamol/RNAseq/Analysis/GSEA")
+
+#Ranked list for GSEA
+
+### D7 P100 vs D7 ctrl
+RNAD7p100_d7ctrl = read.table("Paracetamol/PARACETAMOL_RNASEQ_BULK/Analysis_NSC/30_SARTools_d7/tables/d7P100vsCtrl7.complete.txt", header = TRUE)
+RNAD7p100_d7ctrl = RNAD7p100_d7ctrl[order(RNAD7p100_d7ctrl$pvalue),]
+sum(RNAD7p100_d7ctrl$padj < 0.05)
+RNAD7p100_d7ctrl = merge(RNAD7p100_d7ctrl, myannot, by = "Id")
+sigRNAD7p100_d7ctrl = RNAD7p100_d7ctrl[which(RNAD7p100_d7ctrl$padj < 0.05),]
+write.table(sigRNAD7p100_d7ctrl, "sigRNAD7p100_d7ctrl.txt")
+
+#Ranked list for GSEA
+gsea = data.frame(RNAD7p100_d7ctrl)
+gsea$fcsign <- sign(gsea$log2FoldChange)  # opp/nedregulert
+gsea$logP=-log10(gsea$pvalue)             # størrelsesorden på p-verdi (lav p: høy logP)
+gsea <- gsea[!is.na(gsea$log2FoldChange),]
+gsea$metric = gsea$logP/gsea$fcsign           # logP med fortegn
+gsea <- gsea[order(gsea$metric, decreasing = T),]
+gsea <- gsea[!is.infinite(gsea$metric),]
+gsea$ENSID = gsea$Id
+gsea <- gsea[!is.na(gsea$metric),]
+gsea = gsea[,c("ENSID","metric")]
+rownames(gsea) = NULL
+#write.table(gsea, sep="\t",file="GSEA-RNAd7p100_d7ctrl.rnk", quote=F, row.names=F, col.names = F)
+
+### D7 P200 vs D7 ctrl
+RNAD7p200_d7ctrl = read.table("Paracetamol/PARACETAMOL_RNASEQ_BULK/Analysis_NSC/30_SARTools_d7/tables/d7P200vsCtrl7.complete.txt", header = TRUE)
+RNAD7p200_d7ctrl = RNAD7p200_d7ctrl[order(RNAD7p200_d7ctrl$pvalue),]
+sum(RNAD7p200_d7ctrl$padj < 0.05)
+RNAD7p200_d7ctrl = merge(RNAD7p200_d7ctrl, myannot, by = "Id")
+sigRNAD7p200_d7ctrl = RNAD7p200_d7ctrl[which(RNAD7p200_d7ctrl$padj < 0.05),]
+write.table(sigRNAD7p200_d7ctrl, "sigRNAD7p200_d7ctrl.txt")
+
+#Ranked list for GSEA
+gsea = data.frame(RNAD7p200_d7ctrl)
+gsea$fcsign <- sign(gsea$log2FoldChange)  # opp/nedregulert
+gsea$logP=-log10(gsea$pvalue)             # størrelsesorden på p-verdi (lav p: høy logP)
+gsea <- gsea[!is.na(gsea$log2FoldChange),]
+gsea$metric = gsea$logP/gsea$fcsign           # logP med fortegn
+gsea <- gsea[order(gsea$metric, decreasing = T),]
+gsea <- gsea[!is.infinite(gsea$metric),]
+gsea$ENSID = gsea$Id
+gsea <- gsea[!is.na(gsea$metric),]
+gsea = gsea[,c("ENSID","metric")]
+rownames(gsea) = NULL
+#write.table(gsea, sep="\t",file="GSEA-RNAd7p200_d7ctrl.rnk", quote=F, row.names=F, col.names = F)
+
+### D7 P200 vs D7 P100
+RNAD7p200_d7P100 = read.table("Paracetamol/PARACETAMOL_RNASEQ_BULK/Analysis_NSC/30_SARTools_d7/tables/d7P200vsd7P100.complete.txt", header = TRUE)
+RNAD7p200_d7P100 = RNAD7p200_d7P100[order(RNAD7p200_d7P100$pvalue),]
+sum(RNAD7p200_d7P100$padj < 0.05)
+RNAD7p200_d7P100 = merge(RNAD7p200_d7P100, myannot, by = "Id")
+sigRNAD7p200_d7P100 = RNAD7p200_d7P100[which(RNAD7p200_d7P100$padj < 0.05),]
+write.table(sigRNAD7p200_d7P100, "sigRNAD7p200_d7P100.txt")
+
+#Ranked list for GSEA
+gsea = data.frame(RNAD7p200_d7P100)
+gsea$fcsign <- sign(gsea$log2FoldChange)  # opp/nedregulert
+gsea$logP=-log10(gsea$pvalue)             # størrelsesorden på p-verdi (lav p: høy logP)
+gsea <- gsea[!is.na(gsea$log2FoldChange),]
+gsea$metric = gsea$logP/gsea$fcsign           # logP med fortegn
+gsea <- gsea[order(gsea$metric, decreasing = T),]
+gsea <- gsea[!is.infinite(gsea$metric),]
+gsea$ENSID = gsea$Id
+gsea <- gsea[!is.na(gsea$metric),]
+gsea = gsea[,c("ENSID","metric")]
+rownames(gsea) = NULL
+#write.table(gsea, sep="\t",file="GSEA-RNAd7p200_d7p100.rnk", quote=F, row.names=F, col.names = F)
+
+### D20 P100 vs D20 ctrl
+RNAD20p100_d20ctrl= read.table("Paracetamol/PARACETAMOL_RNASEQ_BULK/Analysis_NSC/30_SARTools_d20/tables/d20P100vsCtrl20.complete.txt", header = TRUE)
+RNAD20p100_d20ctrl = RNAD20p100_d20ctrl[order(RNAD20p100_d20ctrl$pvalue),]
+sum(RNAD20p100_d20ctrl$padj < 0.05)
+RNAD20p100_d20ctrl= merge(RNAD20p100_d20ctrl, myannot, by = "Id")
+sigRNAd20p100_d20ctrl = RNAD20p100_d20ctrl[which(RNAD20p100_d20ctrl$padj < 0.05),]
+write.table(sigRNAd20p100_d20ctrl, "sigRNAd20p100_d20ctrl.txt")
+
+#Ranked list for GSEA
+gsea = data.frame(RNAD20p100_d20ctrl)
+gsea$fcsign <- sign(gsea$log2FoldChange)  # opp/nedregulert
+gsea$logP=-log10(gsea$pvalue)             # størrelsesorden på p-verdi (lav p: høy logP)
+gsea <- gsea[!is.na(gsea$log2FoldChange),]
+gsea$metric = gsea$logP/gsea$fcsign           # logP med fortegn
+gsea <- gsea[order(gsea$metric, decreasing = T),]
+gsea <- gsea[!is.infinite(gsea$metric),]
+gsea$ENSID = gsea$Id
+gsea <- gsea[!is.na(gsea$metric),]
+gsea = gsea[,c("ENSID","metric")]
+rownames(gsea) = NULL
+#write.table(gsea, sep="\t",file="GSEA-RNAd20p100_d20ctrl.rnk", quote=F, row.names=F, col.names = F)
+
+### D20 P200 vs D20 ctrl
+RNAD20p200_d20ctrl= read.table("Paracetamol/PARACETAMOL_RNASEQ_BULK/Analysis_NSC/30_SARTools_d20/tables/d20P200vsCtrl20.complete.txt", header = TRUE)
+RNAD20p200_d20ctrl = RNAD20p200_d20ctrl[order(RNAD20p200_d20ctrl$pvalue),]
+#RNAD20p200_d20ctrl$ensembl_gene_id = RNAD20p200_d20ctrl$Id
+table(RNAD20p200_d20ctrl$padj < 0.05)
+RNAD20p200_d20ctrl= merge(RNAD20p200_d20ctrl, myannot, by = "Id")
+sigRNAd20p200_d20ctrl = RNAD20p200_d20ctrl[which(RNAD20p200_d20ctrl$padj < 0.05),]
+write.table(sigRNAd20p200_d20ctrl, "sigRNAd20p200_d20ctrl.txt")
+
+#Ranked list for GSEA
+gsea = data.frame(RNAD20p200_d20ctrl)
+gsea$fcsign <- sign(gsea$log2FoldChange)  # opp/nedregulert
+gsea$logP=-log10(gsea$pvalue)             # størrelsesorden på p-verdi (lav p: høy logP)
+gsea <- gsea[!is.na(gsea$log2FoldChange),]
+gsea$metric = gsea$logP/gsea$fcsign           # logP med fortegn
+gsea <- gsea[order(gsea$metric, decreasing = T),]
+gsea <- gsea[!is.infinite(gsea$metric),]
+gsea$ENSID = gsea$Id
+gsea <- gsea[!is.na(gsea$metric),]
+gsea = gsea[,c("ENSID","metric")]
+rownames(gsea) = NULL
+#write.table(gsea, sep="\t",file="GSEA-RNAd20p200_d20ctrl.rnk", quote=F, row.names=F, col.names = F)
+
+### D20 P200 vs D20 P100
+RNAD20p200_d20P100= read.table("Paracetamol/PARACETAMOL_RNASEQ_BULK/Analysis_NSC/30_SARTools_d20/tables/d20P200vsD20P100.complete.txt", header = TRUE)
+RNAD20p200_d20P100 = RNAD20p200_d20P100[order(RNAD20p200_d20P100$pvalue),]
+sum(RNAD20p200_d20P100$padj < 0.05)
+RNAD20p200_d20P100= merge(RNAD20p200_d20P100, myannot, by = "Id")
+sigRNAD20p200_d20P100 = RNAD20p200_d20P100[which(RNAD20p200_d20P100$padj < 0.05),]
+write.table(sigRNAD20p200_d20P100, "sigRNAD20p200_d20P100.txt")
+
+#Ranked list for GSEA
+gsea = data.frame(RNAD20p200_d20P100)
+gsea$fcsign <- sign(gsea$log2FoldChange)  # opp/nedregulert
+gsea$logP=-log10(gsea$pvalue)             # størrelsesorden på p-verdi (lav p: høy logP)
+gsea <- gsea[!is.na(gsea$log2FoldChange),]
+gsea$metric = gsea$logP/gsea$fcsign           # logP med fortegn
+gsea <- gsea[order(gsea$metric, decreasing = T),]
+gsea <- gsea[!is.infinite(gsea$metric),]
+gsea$ENSID = gsea$Id
+gsea <- gsea[!is.na(gsea$metric),]
+gsea = gsea[,c("ENSID","metric")]
+rownames(gsea) = NULL
+#write.table(gsea, sep="\t",file="GSEA-RNAd20p200_d20P100.rnk", quote=F, row.names=F, col.names = F)
+```
+
+```{r Venn diagrams}
+#Day 7
+D7p100.degs = RNAD7p100_d7ctrl[!is.na(RNAD7p100_d7ctrl$padj),]
+rownames(D7p100.degs) = D7p100.degs$ensembl_gene_id
+D7p100.degs = row.names(D7p100.degs[D7p100.degs$padj <0.05,])
+sum(RNAD7p100_d7ctrl$padj < 0.05, na.rm=TRUE)
+length(D7p100.degs)
+  
+D7p200.degs = RNAD7p200_d7ctrl[!is.na(RNAD7p200_d7ctrl$padj),]
+rownames(D7p200.degs) = D7p200.degs$Id
+D7p200.degs = row.names(D7p200.degs[D7p200.degs$padj <0.05,])
+sum(RNAD7p200_d7ctrl$padj < 0.05, na.rm=TRUE)
+length(D7p200.degs)
+
+D7P200vsp100.degs = RNAD7p200_d7P100[!is.na(RNAD7p200_d7P100$padj),]
+rownames(D7P200vsp100.degs) = D7P200vsp100.degs$Id
+D7P200vsp100.degs = row.names(D7P200vsp100.degs[D7P200vsp100.degs$padj <0.05,])
+
+# Venn-diagram using the `VennDiagram` library (see below for alternative method)
+library(VennDiagram)
+# Calculate the intersection of the three sets
+deg.venn <- list('n12' = length(intersect(D7p100.degs, D7p200.degs)),
+                 'n13' = length(intersect(D7p100.degs, D7P200vsp100.degs)),
+                 'n23' = length(intersect(D7p200.degs, D7P200vsp100.degs)),
+                 "allintersect" = length(intersect(intersect(D7p100.degs,D7p200.degs),D7P200vsp100.degs)),
+                 'D7p100' = length(D7p100.degs),
+                 'D7p200' = length(D7p200.degs),
+                 "D7P200vsp100" = length(D7P200vsp100.degs))
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.triple.venn(deg.venn$D7p100, deg.venn$D7p200, deg.venn$D7P200vsp100,
+                              deg.venn$n12, deg.venn$n23, deg.venn$n13, 
+                              deg.venn$allintersect,
+                              category = c("Day 7: P100 vs Control", "Day 7: P200 vs Control", "Day 7: P100 vs P200"), 
+                              euler.d =F,
+                              scaled = F,
+                              fill = c( "#F28E2B", "#B60A1C", "#8A494D" ), alpha = rep(0.5, 3),
+                              cat.pos = c(0, 0, 180))
+
+# Actually plot the plot
+pdf("VennD7.pdf", height = 5, width = 5)
+grid.draw(venn.plot)
+dev.off()
+
+#day 20
+D20p100.degs = RNAD20p100_d20ctrl[!is.na(RNAD20p100_d20ctrl$padj),]
+rownames(D20p100.degs) = D20p100.degs$Id
+D20p100.degs = row.names(D20p100.degs[D20p100.degs$padj <0.05,])
+  
+D20p200.degs = RNAD20p200_d20ctrl[!is.na(RNAD20p200_d20ctrl$padj),]
+rownames(D20p200.degs) = D20p200.degs$Id
+D20p200.degs = row.names(D20p200.degs[D20p200.degs$padj <0.05,])
+
+D20P200vsp100.degs = RNAD20p200_d20P100[!is.na(RNAD20p200_d20P100$padj),]
+rownames(D20P200vsp100.degs) = D20P200vsp100.degs$Id
+D20P200vsp100.degs = row.names(D20P200vsp100.degs[D20P200vsp100.degs$padj <0.05,])
+
+# Venn-diagram using the `VennDiagram` library (see below for alternative method)
+library(VennDiagram)
+# Calculate the intersection of the three sets
+deg.venn <- list('n12' = length(intersect(D20p100.degs, D20p200.degs)),
+                 'n13' = length(intersect(D20p100.degs, D20P200vsp100.degs)),
+                 'n23' = length(intersect(D20p200.degs, D20P200vsp100.degs)),
+                 "allintersect" = length(intersect(intersect(D20p100.degs,D20p200.degs),D20P200vsp100.degs)),
+                 'D20p100' = length(D20p100.degs),
+                 'D20p200' = length(D20p200.degs),
+                 "D20P200vsp100" = length(D20P200vsp100.degs))
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.triple.venn(deg.venn$D20p100, deg.venn$D20p200, deg.venn$D20P200vsp100,
+                              deg.venn$n12, deg.venn$n23, deg.venn$n13, 
+                              deg.venn$allintersect,
+                              category = c("Day 7: P100 vs Control", "Day 7: P200 vs Control", "Day 7: P100 vs P200"), 
+                              euler.d =F,
+                              scaled = F,
+                              fill = c( "#F28E2B", "#B60A1C", "#8A494D" ), alpha = rep(0.5, 3),
+                              cat.pos = c(0, 0, 180))
+
+# Actually plot the plot
+pdf("VennD20.pdf", height = 5, width = 5)
+grid.draw(venn.plot)
+dev.off()
+
+#P100 vs control
+
+deg.venn <- list('n12' = length(intersect(D7p100.degs, D20p100.degs)),
+                 'D7p100' = length(D7p100.degs),
+                 'D20p100' = length(D20p100.degs))
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.pairwise.venn(deg.venn$D7p100, deg.venn$D20p100,
+                              cross.area =deg.venn$n12,
+                              category = c("Day 7: P100 vs Ctrl", "Day 20: P100 vs Ctrl"), 
+                              euler.d =F,
+                              scaled = F, rotation.degree = 180,
+                              fill = c( "#B60A1C", "#8A494D" ), alpha = rep(0.5, 2),
+                              cat.pos = c(0, 0))
+
+# Actually plot the plot
+pdf("VennP100vscontrol.pdf", height = 5, width = 5)
+grid.draw(venn.plot)
+dev.off()
+
+#P200 vs control
+
+deg.venn <- list('n12' = length(intersect(D7p200.degs, D20p200.degs)),
+                 'D7p200' = length(D7p200.degs),
+                 'D20p200' = length(D20p200.degs))
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.pairwise.venn(deg.venn$D7p200, deg.venn$D20p200,
+                              cross.area =deg.venn$n12,
+                              category = c("Day 7: P200 vs Ctrl", "Day 20: P200 vs Ctrl"), 
+                              euler.d =F,
+                              scaled = F,
+                              fill = c( "#B60A1C", "#8A494D" ), alpha = rep(0.5, 2),
+                              cat.pos = c(0, 0))
+
+# Actually plot the plot
+pdf("VennP200vscontrol.pdf", height = 5, width = 5)
+grid.draw(venn.plot)
+dev.off()
+
+#P200 vs P100
+
+deg.venn <- list('n12' = length(intersect(D7P200vsp100.degs, D20P200vsp100.degs)),
+                 'D7p200' = length(D7P200vsp100.degs),
+                 'D20p200' = length(D20P200vsp100.degs))
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.pairwise.venn(deg.venn$D7p200, deg.venn$D20p200,
+                              cross.area =deg.venn$n12,
+                              category = c("Day 7: P100 vs P200", "Day 20: P100 vs P200"), 
+                              euler.d =F,
+                              scaled = F,rotation.degree = 180,
+                              fill = c( "#B60A1C", "#8A494D" ), alpha = rep(0.5, 2),
+                              cat.pos = c(0, 0))
+
+# Actually plot the plot
+pdf("VennP200vsP100.pdf", height = 5, width = 5)
+grid.draw(venn.plot)
+dev.off()
+
+```
+
+```{r volcano plots and heatmaps}
+#D7 P100 vs control
+colnames(RNAD7p100_d7ctrl)[1] = "ensembl_gene_id"
+RNAD7p100_d7ctrl = merge(RNAD7p100_d7ctrl, myannot, by = "ensembl_gene_id")
+RNAD7p100_d7ctrl = RNAD7p100_d7ctrl[order(RNAD7p100_d7ctrl$pvalue),]
+write.csv(RNAD7p100_d7ctrl, file="D7p100_d7ctrl_results_annotated.csv")
+  
+keyvals.colour <- ifelse(
+    RNAD7p100_d7ctrl$padj >= 0.05 |  RNAD7p100_d7ctrl$padj == "NA", 'grey30',
+      ifelse(RNAD7p100_d7ctrl$padj < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(RNAD7p100_d7ctrl,
+    lab = RNAD7p100_d7ctrl$external_gene_name,
+    selectLab =RNAD7p100_d7ctrl$external_gene_name[1:300],
+    labSize = 2,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    title = "Day 7: Paracetamol 100 µM vs control",
+    subtitle = "188 significant genes",
+    caption = "",
+    gridlines.minor = F,
+    gridlines.major = F)
+dev.copy(pdf,paste0("EnhVol_D7_P100vsControl.pdf"), width = 8, height=9, paper='special')
+dev.off()
+
+#Heatmap
+targetD7P100ctrl =  target  %>% dplyr::filter(Day %in% c("7")) %>% dplyr::filter(Concentration %in% c("0", "100"))
+
+D7P100ctrlgenes = RNAD7p100_d7ctrl[1:50,]$ensembl_gene_id
+normcountsD7P100ctrl = normcounts.df.annot %>% dplyr::filter(normcounts.df.annot$ensembl_gene_id %in% D7P100ctrlgenes) %>% dplyr::select(contains("D7") | ensembl_gene_id |external_gene_name) %>% dplyr::select(!contains("P200")) %>% dplyr::select(!ensembl_gene_id) ##Only significant genes
+
+rownames(normcountsD7P100ctrl) = normcountsD7P100ctrl$external_gene_name
+normcountsD7P100ctrl = normcountsD7P100ctrl %>%  dplyr::select(!external_gene_name) %>% log2(.)
+normcountsD7P100ctrl[normcountsD7P100ctrl == -Inf] = 0
+
+annotation_col = data.frame(
+    Day = factor(rep(c("D7 ctrl", "D7 P100"), c(6,5))))
+annColor = list(Day = c("D7 ctrl" = "#B60A1C","D7 P100" =  "#FFD700"))
+
+top50 = RNAD7p100_d7ctrl[1:50,]
+top50 = top50[order(match(top50$external_gene_name, rownames(normcountsD7P100ctrl))), , drop = FALSE]
+identical(top50$external_gene_name, rownames(normcountsD7P100ctrl)) #Sjekk at det er samme rekkefølge
+normcountsD7P100ctrl = as.matrix(normcountsD7P100ctrl)
+
+
+#Flip order of column cluster dendogram
+col_dend = dendsort(hclust(dist(t(normcountsD7P100ctrl))), isReverse = TRUE)
+
+p1 = rowAnnotation(FoldChange = anno_barplot(top50$log2FoldChange))
+p2 = pheatmap(normcountsD7P100ctrl, annotation_col = annotation_col,cluster_cols = col_dend, show_row_dend = FALSE, annotation_colors = annColor, name = "log2(normalized expression)")
+
+
+pdf("heatmat_Day7_P100vsCtrl_pheatmap.pdf", height = 9, width = 8)
+p1 + p2
+dev.off()
+
+
+#D7 P200 vs control
+colnames(RNAD7p200_d7ctrl)[1] = "ensembl_gene_id"
+RNAD7p200_d7ctrl = merge(RNAD7p200_d7ctrl, myannot, by = "ensembl_gene_id")
+RNAD7p200_d7ctrl = RNAD7p200_d7ctrl[order(RNAD7p200_d7ctrl$pvalue),]
+write.csv(RNAD7p200_d7ctrl, file="D7p200_d7ctrl_results_annotated.csv")
+
+keyvals.colour <- ifelse(
+    RNAD7p200_d7ctrl$padj >= 0.05 |  RNAD7p200_d7ctrl$padj == "NA", 'grey30',
+      ifelse(RNAD7p200_d7ctrl$padj < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(RNAD7p200_d7ctrl,
+    lab = RNAD7p200_d7ctrl$external_gene_name,
+    selectLab =RNAD7p200_d7ctrl$external_gene_name[1:300],
+    labSize = 2,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    title = "Day 7: Paracetamol 200 µM vs control ",
+    subtitle = "1817 significant genes",
+    caption = "",
+    gridlines.minor = F,
+    gridlines.major = F)
+dev.copy(pdf,paste0("EnhVol_D7_P200vsControl.pdf"), width = 8, height=9, paper='special')
+dev.off()
+
+#Heatmap
+targetD7P200ctrl =  target  %>% dplyr::filter(Day %in% c("7")) %>% dplyr::filter(Concentration %in% c("0", "200"))
+
+D7P200ctrlgenes = RNAD7p200_d7ctrl[1:50,]$ensembl_gene_id
+normcountsD7P200ctrl = normcounts.df.annot %>% dplyr::filter(normcounts.df.annot$ensembl_gene_id %in% D7P200ctrlgenes) %>% dplyr::select(contains("D7") | ensembl_gene_id |external_gene_name) %>% dplyr::select(!contains("P100")) %>% dplyr::select(!ensembl_gene_id) ##Only significant genes
+
+rownames(normcountsD7P200ctrl) = normcountsD7P200ctrl$external_gene_name
+normcountsD7P200ctrl = normcountsD7P200ctrl %>%  dplyr::select(!external_gene_name) %>% log2(.)
+normcountsD7P200ctrl[normcountsD7P200ctrl == -Inf] = 0
+
+annotation_col = data.frame(
+    Day = factor(rep(c("D7 ctrl", "D7 P200"), c(6,5))))
+annColor = list(Day = c("D7 ctrl" = "#B60A1C","D7 P200" =  "#8CC2CA"))
+
+top50 = RNAD7p200_d7ctrl[1:50,]
+top50 = top50[order(match(top50$external_gene_name, rownames(normcountsD7P200ctrl))), , drop = FALSE]
+identical(top50$external_gene_name, rownames(normcountsD7P200ctrl)) #Sjekk at det er samme rekkefølge
+normcountsD7P200ctrl = as.matrix(normcountsD7P200ctrl)
+
+
+#Flip order of column cluster dendogram
+col_dend = dendsort(hclust(dist(t(normcountsD7P200ctrl))), isReverse = TRUE)
+
+p1 = rowAnnotation(FoldChange = anno_barplot(top50$log2FoldChange))
+p2 = pheatmap(normcountsD7P200ctrl, annotation_col = annotation_col,cluster_cols = col_dend, show_row_dend = FALSE, annotation_colors = annColor, name = "log2(normalized expression)")
+
+
+pdf("heatmat_Day7_P200vsCtrl_pheatmap.pdf", height = 9, width = 8)
+p1 + p2
+dev.off()
+
+#Day 7: P200 vs p100
+colnames(RNAD7p200_d7P100)[1] = "ensembl_gene_id"
+RNAD7p200_d7P100 = merge(RNAD7p200_d7P100, myannot, by = "ensembl_gene_id")
+RNAD7p200_d7P100 = RNAD7p200_d7P100[order(RNAD7p200_d7P100$pvalue),]
+write.csv(RNAD7p200_d7P100, file="D7p200_d7P100_results_annotated.csv")
+
+
+keyvals.colour <- ifelse(
+    RNAD7p200_d7P100$padj >= 0.05 |  RNAD7p200_d7P100$padj == "NA", 'grey30',
+      ifelse(RNAD7p200_d7P100$padj < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(RNAD7p200_d7P100,
+    lab = RNAD7p200_d7P100$external_gene_name,
+    selectLab =RNAD7p200_d7P100$external_gene_name[1:10],
+    labSize = 2,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    title = "Day 7: Paracetamol 200 µM vs Paracetamol 100 µM ",
+    subtitle = "10 significant genes",
+    caption = "",
+    gridlines.minor = F,
+    gridlines.major = F)
+dev.copy(pdf,paste0("EnhVol_D7_P200vsP100.pdf"), width = 8, height=9, paper='special')
+dev.off()
+
+#Heatmap
+targetD7P200P100 =  target  %>% dplyr::filter(Day %in% c("7")) %>% dplyr::filter(Concentration %in% c("100", "200"))
+
+D7P200P100genes = RNAD7p200_d7P100[1:10,]$ensembl_gene_id
+normcountsD7P200P100 = normcounts.df.annot %>% dplyr::filter(normcounts.df.annot$ensembl_gene_id %in% D7P200P100genes) %>% dplyr::select(contains("D7") | ensembl_gene_id |external_gene_name) %>% dplyr::select(!contains("ctrl")) %>% dplyr::select(!ensembl_gene_id) ##Only significant genes
+
+rownames(normcountsD7P200P100) = normcountsD7P200P100$external_gene_name
+normcountsD7P200P100 = normcountsD7P200P100 %>%  dplyr::select(!external_gene_name) %>% log2(.)
+normcountsD7P200P100[normcountsD7P200P100 == -Inf] = 0
+
+annotation_col = data.frame(
+    Day = factor(rep(c("D7 P100", "D7 P200"), c(5,5))))
+annColor = list(Day = c("D7 P100" = "#FFD700","D7 P200" =  "#8CC2CA"))
+
+top50 = RNAD7p200_d7P100[1:10,]
+top50 = top50[order(match(top50$external_gene_name, rownames(normcountsD7P200P100))), , drop = FALSE]
+identical(top50$external_gene_name, rownames(normcountsD7P200P100)) #Sjekk at det er samme rekkefølge
+normcountsD7P200P100 = as.matrix(normcountsD7P200P100)
+
+
+#Flip order of column cluster dendogram
+col_dend = dendsort(hclust(dist(t(normcountsD7P200P100))), isReverse = F)
+
+p1 = rowAnnotation(FoldChange = anno_barplot(top50$log2FoldChange))
+p2 = pheatmap(normcountsD7P200P100, annotation_col = annotation_col,cluster_cols = col_dend, show_row_dend = FALSE, annotation_colors = annColor, name = "log2(normalized expression)")
+
+
+pdf("heatmat_Day7_P200vsP100_pheatmap.pdf", height = 4, width = 8)
+p1 + p2
+dev.off()
+
+#DAY 20: P100 vs control
+colnames(RNAD20p100_d20ctrl)[1] = "ensembl_gene_id"
+RNAD20p100_d20ctrl = merge(RNAD20p100_d20ctrl, myannot, by = "ensembl_gene_id")
+RNAD20p100_d20ctrl = RNAD20p100_d20ctrl[order(RNAD20p100_d20ctrl$pvalue),]
+write.csv(RNAD20p100_d20ctrl, file="D20p100_d20ctrl_results_annotated.csv")
+
+keyvals.colour <- ifelse(
+    RNAD20p100_d20ctrl$padj >= 0.05 |  RNAD20p100_d20ctrl$padj == "NA", 'grey30',
+      ifelse(RNAD20p100_d20ctrl$padj < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(RNAD20p100_d20ctrl,
+    lab = RNAD20p100_d20ctrl$external_gene_name,
+    selectLab =RNAD20p100_d20ctrl$external_gene_name[1:250],
+    labSize = 2,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    title = "Day 20: Paracetamol 100 µM vs control",
+    subtitle = "338 significant genes",
+    caption = "",
+    gridlines.minor = F,
+    gridlines.major = F)
+dev.copy(pdf,paste0("EnhVol_D20_P100vsControl.pdf"), width = 8, height=9, paper='special')
+dev.off()
+
+#Heatmap
+targetD20P100ctrl =  target  %>% dplyr::filter(Day %in% c("20")) %>% dplyr::filter(Concentration %in% c("0", "100"))
+
+D20P100ctrlgenes = RNAD20p100_d20ctrl[1:50,]$ensembl_gene_id
+normcountsD20P100ctrl = normcounts.df.annot %>% dplyr::filter(normcounts.df.annot$ensembl_gene_id %in% D20P100ctrlgenes) %>% dplyr::select(contains("D20") | ensembl_gene_id |external_gene_name) %>% dplyr::select(!contains("P200")) %>% dplyr::select(!ensembl_gene_id) ##Only significant genes
+
+rownames(normcountsD20P100ctrl) = normcountsD20P100ctrl$external_gene_name
+normcountsD20P100ctrl = normcountsD20P100ctrl %>%  dplyr::select(!external_gene_name) %>% log2(.)
+normcountsD20P100ctrl[normcountsD20P100ctrl == -Inf] = 0
+
+annotation_col = data.frame(
+    Day = factor(rep(c("D20 ctrl", "D20 P100"), c(4,4))))
+annColor = list(Day = c("D20 ctrl" = "#C0D6E4","D20 P100" =  "#D37295"))
+
+top50 = RNAD20p100_d20ctrl[1:50,]
+top50 = top50[order(match(top50$external_gene_name, rownames(normcountsD20P100ctrl))), , drop = FALSE]
+identical(top50$external_gene_name, rownames(normcountsD20P100ctrl)) #Sjekk at det er samme rekkefølge
+normcountsD20P100ctrl = as.matrix(normcountsD20P100ctrl)
+
+
+#Flip order of column cluster dendogram
+col_dend = dendsort(hclust(dist(t(normcountsD20P100ctrl))), isReverse = FALSE)
+
+p1 = rowAnnotation(FoldChange = anno_barplot(top50$log2FoldChange))
+p2 = pheatmap(normcountsD20P100ctrl, annotation_col = annotation_col,cluster_cols = col_dend, show_row_dend = FALSE, annotation_colors = annColor, name = "log2(normalized expression)")
+
+
+pdf("heatmat_Day20_P100vsCtrl_pheatmap.pdf", height = 9, width = 8)
+p1 + p2
+dev.off()
+
+#DAY 20: P200 vs control
+colnames(RNAD20p200_d20ctrl)[1] = "ensembl_gene_id"
+RNAD20p200_d20ctrl = merge(RNAD20p200_d20ctrl, myannot, by = "ensembl_gene_id")
+RNAD20p200_d20ctrl = RNAD20p200_d20ctrl[order(RNAD20p200_d20ctrl$pvalue),]
+write.csv(RNAD20p200_d20ctrl, file="D20p200_d20ctrl_results_annotated.csv")
+
+keyvals.colour <- ifelse(
+    RNAD20p200_d20ctrl$padj >= 0.05 |  RNAD20p200_d20ctrl$padj == "NA", 'grey30',
+      ifelse(RNAD20p200_d20ctrl$padj < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(RNAD20p200_d20ctrl,
+    lab = RNAD20p200_d20ctrl$external_gene_name,
+    selectLab =RNAD20p200_d20ctrl$external_gene_name[1:350],
+    labSize = 2,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    title = "Day 20: Paracetamol 200 µM vs control",
+    subtitle = "1674 significant genes",
+    caption = "",
+    gridlines.minor = F,
+    gridlines.major = F)
+dev.copy(pdf,paste0("EnhVol_D20_P200vsControl.pdf"), width = 8, height=9, paper='special')
+dev.off()
+
+#Heatmap
+targetD20P200ctrl =  target  %>% dplyr::filter(Day %in% c("20")) %>% dplyr::filter(Concentration %in% c("0", "200"))
+
+D20P200ctrlgenes = RNAD20p200_d20ctrl[1:50,]$ensembl_gene_id
+normcountsD20P200ctrl = normcounts.df.annot %>% dplyr::filter(normcounts.df.annot$ensembl_gene_id %in% D20P200ctrlgenes) %>% dplyr::select(contains("D20") | ensembl_gene_id |external_gene_name) %>% dplyr::select(!contains("P100")) %>% dplyr::select(!ensembl_gene_id) ##Only significant genes
+
+rownames(normcountsD20P200ctrl) = normcountsD20P200ctrl$external_gene_name
+normcountsD20P200ctrl = normcountsD20P200ctrl %>%  dplyr::select(!external_gene_name) %>% log2(.)
+normcountsD20P200ctrl[normcountsD20P200ctrl == -Inf] = 0
+
+annotation_col = data.frame(
+    Day = factor(rep(c("D20 ctrl", "D20 P200"), c(4,6))))
+annColor = list(Day = c("D20 ctrl" = "#C0D6E4","D20 P200" =  "#8175AA"))
+
+top50 = RNAD20p200_d20ctrl[1:50,]
+top50 = top50[order(match(top50$external_gene_name, rownames(normcountsD20P200ctrl))), , drop = FALSE]
+identical(top50$external_gene_name, rownames(normcountsD20P200ctrl)) #Sjekk at det er samme rekkefølge
+normcountsD20P200ctrl = as.matrix(normcountsD20P200ctrl)
+
+
+#Flip order of column cluster dendogram
+col_dend = dendsort(hclust(dist(t(normcountsD20P200ctrl))), isReverse = TRUE)
+
+p1 = rowAnnotation(FoldChange = anno_barplot(top50$log2FoldChange))
+p2 = pheatmap(normcountsD20P200ctrl, annotation_col = annotation_col,cluster_cols = col_dend, show_row_dend = FALSE, annotation_colors = annColor, name = "log2(normalized expression)")
+
+
+pdf("heatmat_Day20_P200vsCtrl_pheatmap.pdf", height = 9, width = 8)
+p1 + p2
+dev.off()
+
+
+#DAY 20: P100 vs control
+colnames(RNAD20p200_d20P100)[1] = "ensembl_gene_id"
+RNAD20p200_d20P100 = merge(RNAD20p200_d20P100, myannot, by = "ensembl_gene_id")
+RNAD20p200_d20P100 = RNAD20p200_d20P100[order(RNAD20p200_d20P100$pvalue),]
+write.csv(RNAD20p200_d20P100, file="D20p200_d20P100_results_annotated.csv")
+
+keyvals.colour <- ifelse(
+    RNAD20p200_d20P100$padj >= 0.05 |  RNAD20p200_d20P100$padj == "NA", 'grey30',
+      ifelse(RNAD20p200_d20P100$padj < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(RNAD20p200_d20P100,
+    lab = RNAD20p200_d20P100$external_gene_name,
+    selectLab =RNAD20p200_d20P100$external_gene_name[1:350],
+    labSize = 2,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    title = "Day 20: Paracetamol 200 µM vs Paracetamol 100 µM",
+    subtitle = "1083 significant genes",
+    caption = "",
+    gridlines.minor = F,
+    gridlines.major = F)
+dev.copy(pdf,paste0("EnhVol_D20_P200vsP100.pdf"), width = 8, height=9, paper='special')
+dev.off()
+
+#Heatmap
+targetD20P200P100 =  target  %>% dplyr::filter(Day %in% c("20")) %>% dplyr::filter(Concentration %in% c("100", "200"))
+
+D20P200P100genes = RNAD20p200_d20P100[1:50,]$ensembl_gene_id
+normcountsD20P200P100 = normcounts.df.annot %>% dplyr::filter(normcounts.df.annot$ensembl_gene_id %in% D20P200P100genes) %>% dplyr::select(contains("D20") | ensembl_gene_id |external_gene_name) %>% dplyr::select(!contains("ctrl")) %>% dplyr::select(!ensembl_gene_id) ##Only significant genes
+
+rownames(normcountsD20P200P100) = normcountsD20P200P100$external_gene_name
+normcountsD20P200P100 = normcountsD20P200P100 %>%  dplyr::select(!external_gene_name) %>% log2(.)
+normcountsD20P200P100[normcountsD20P200P100 == -Inf] = 0
+
+annotation_col = data.frame(
+    Day = factor(rep(c("D20 P100", "D20 P200"), c(4,6))))
+annColor = list(Day = c("D20 P100" = "#D37295","D20 P200" =  "#8175AA"))
+
+top50 = RNAD20p200_d20P100[1:50,]
+top50 = top50[order(match(top50$external_gene_name, rownames(normcountsD20P200P100))), , drop = FALSE]
+identical(top50$external_gene_name, rownames(normcountsD20P200P100)) #Sjekk at det er samme rekkefølge
+normcountsD20P200P100 = as.matrix(normcountsD20P200P100)
+
+
+#Flip order of column cluster dendogram
+col_dend = dendsort(hclust(dist(t(normcountsD20P200P100))), isReverse = TRUE)
+
+p1 = rowAnnotation(FoldChange = anno_barplot(top50$log2FoldChange))
+p2 = pheatmap(normcountsD20P200P100, annotation_col = annotation_col,cluster_cols = col_dend, show_row_dend = FALSE, annotation_colors = annColor, name = "log2(normalized expression)")
+
+
+pdf("heatmat_Day20_P200vsP100_pheatmap.pdf", height = 9, width = 8)
+p1 + p2
+dev.off()
+```
+
+# GSEA plots
+```{r GSEA}
+currentjob = "GSEA"
+
+up = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd7p100_d7ctrl/gsea_report_for_na_pos_1603963354419.tsv", sep = '\t', header = TRUE)
+down = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd7p100_d7ctrl/gsea_report_for_na_neg_1603963354419.tsv", sep = '\t', header = TRUE)
+
+GSEAd7p100_d7ctrl = rbind(up,down)
+GSEAd7p100_d7ctrl$NES = as.numeric(GSEAd7p100_d7ctrl$NES)
+GSEAd7p100_d7ctrl = GSEAd7p100_d7ctrl %>% dplyr::filter(FDR.q.val< 0.1) %>% arrange(desc(abs(NES)))
+write.csv(GSEAd7p100_d7ctrl, file="GSEAd7p100_d7ctrl.csv")
+
+ggplot(GSEAd7p100_d7ctrl[1:19,], aes(x = NES , y = reorder(NAME,NES), fill = SIZE))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(FDR.q.val, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(0,850), breaks = c(20, 200, 400, 600, 800))+
+  labs(title = "Day 7: P100 vs control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D7.P100vsCtrl.pdf"), width = 8, height=6, paper='special')
+dev.off()
+
+up = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd7p200_d7ctrl/gsea_report_for_na_pos_1603964182241.tsv", sep = '\t', header = TRUE)
+down = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd7p200_d7ctrl/gsea_report_for_na_neg_1603964182241.tsv", sep = '\t', header = TRUE)
+
+GSEAd7p200_d7ctrl = rbind(up,down)
+GSEAd7p200_d7ctrl$NES = as.numeric(GSEAd7p200_d7ctrl$NES)
+GSEAd7p200_d7ctrl = GSEAd7p200_d7ctrl %>% dplyr::filter(FDR.q.val< 0.1) %>% arrange(desc(abs(NES)))
+write.csv(GSEAd7p200_d7ctrl, file="GSEAd7p200_d7ctrl.csv")
+
+ggplot(GSEAd7p200_d7ctrl[1:20,], aes(x = NES , y = reorder(NAME,NES), fill = SIZE))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(FDR.q.val, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(0,850), breaks = c(20, 200, 400, 600, 800))+
+  labs(title = "Day 7: P200 vs control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D7.P200vsCtrl.pdf"), width = 8, height=6, paper='special')
+dev.off()
+
+
+up = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd7p200_d7p100/gsea_report_for_na_pos_1603964205376.tsv", sep = '\t', header = TRUE)
+down = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd7p200_d7p100/gsea_report_for_na_neg_1603964205376.tsv", sep = '\t', header = TRUE)
+
+GSEAd7p200_d7p100 = rbind(up,down)
+GSEAd7p200_d7p100$NES = as.numeric(GSEAd7p200_d7p100$NES)
+GSEAd7p200_d7p100 = GSEAd7p200_d7p100 %>% dplyr::filter(FDR.q.val< 0.1) %>% arrange(desc(abs(NES)))
+write.csv(GSEAd7p200_d7p100, file="GSEAd7p200_d7p100.csv")
+
+ggplot(GSEAd7p200_d7p100[1:20,], aes(x = NES , y = reorder(NAME,NES), fill = SIZE))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(FDR.q.val, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(0,850), breaks = c(20, 200, 400, 600, 800))+
+  labs(title = "Day 7: P200 vs P100", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D7.P200vsP100.pdf"), width = 8, height=6, paper='special')
+dev.off()
+
+
+up = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd20p100_d20ctrl/gsea_report_for_na_pos_1603964209926.tsv", sep = '\t', header = TRUE)
+down = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd20p100_d20ctrl/gsea_report_for_na_neg_1603964209926.tsv", sep = '\t', header = TRUE)
+
+GSEAd20p100_d20ctrl = rbind(up,down)
+GSEAd20p100_d20ctrl$NES = as.numeric(GSEAd20p100_d20ctrl$NES)
+GSEAd20p100_d20ctrl = GSEAd20p100_d20ctrl %>% dplyr::filter(FDR.q.val< 0.1) %>% arrange(desc(abs(NES)))
+write.csv(GSEAd20p100_d20ctrl, file="GSEAd20p100_d20ctrl.csv")
+
+ggplot(GSEAd20p100_d20ctrl[1:20,], aes(x = NES , y = reorder(NAME,NES), fill = SIZE))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(FDR.q.val, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(0,850), breaks = c(20, 200, 400, 600, 800))+
+  labs(title = "Day 20: P100 vs Control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D20.P100vsControl.pdf"), width = 8, height=6, paper='special')
+dev.off()
+
+
+up = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd20p200_d20ctrl/gsea_report_for_na_pos_1604044517593.tsv", sep = '\t', header = TRUE)
+down = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd20p200_d20ctrl/gsea_report_for_na_neg_1604044517593.tsv", sep = '\t', header = TRUE)
+
+GSEAd20p200_d20ctrl = rbind(up,down)
+GSEAd20p200_d20ctrl$NES = as.numeric(GSEAd20p200_d20ctrl$NES)
+GSEAd20p200_d20ctrl = GSEAd20p200_d20ctrl %>% dplyr::filter(FDR.q.val< 0.1) %>% arrange(desc(abs(NES)))
+write.csv(GSEAd20p200_d20ctrl, file="GSEAd20p200_d20ctrl.csv")
+
+ggplot(GSEAd20p200_d20ctrl[1:20,], aes(x = NES , y = reorder(NAME,NES), fill = SIZE))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(FDR.q.val, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(0,850), breaks = c(20, 200, 400, 600, 800))+
+  labs(title = "Day 20: P200 vs Control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D20.P200vsControl.pdf"), width = 8, height=6, paper='special')
+dev.off()
+
+up = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd20p200_d20P100/gsea_report_for_na_pos_1603964262265.tsv", sep = '\t', header = TRUE)
+down = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/GSEA-RNAd20p200_d20P100/gsea_report_for_na_neg_1603964262265.tsv", sep = '\t', header = TRUE)
+
+GSEAd20p200_d20p100 = rbind(up,down)
+GSEAd20p200_d20p100$NES = as.numeric(GSEAd20p200_d20p100$NES)
+GSEAd20p200_d20p100 = GSEAd20p200_d20p100 %>% dplyr::filter(FDR.q.val< 0.1) %>% arrange(desc(abs(NES)))
+write.csv(GSEAd20p200_d20p100, file="GSEAd20p200_d20p100.csv")
+
+ggplot(GSEAd20p200_d20p100[1:20,], aes(x = NES , y = reorder(NAME,NES), fill = SIZE))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(FDR.q.val, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(0,850), breaks = c(20, 200, 400, 600, 800))+
+  labs(title = "Day 20: P200 vs P100", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D20.P200vsP100.pdf"), width = 8, height=6, paper='special')
+dev.off()
+
+
+
+down = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/TR_P100.GseaPreranked.1643792322881/gsea_report_for_na_neg_1643792322881.tsv", sep = '\t', header = TRUE)
+up = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/TR_P100.GseaPreranked.1643792322881/gsea_report_for_na_pos_1643792322881.tsv", sep = '\t', header = TRUE)
+
+GSEAtrP100 = rbind(up,down)
+GSEAtrP100$NES = as.numeric(GSEAtrP100$NES)
+GSEAtrP100 = GSEAtrP100 %>% dplyr::filter(FDR.q.val< 0.1) %>% arrange(desc(abs(NES)))
+write.csv(GSEAtrP100, file="GSEAtrP100.csv")
+
+ggplot(GSEAtrP100[1:20,], aes(x = NES , y = reorder(NAME,NES), fill = SIZE))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(FDR.q.val, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(0,850), breaks = c(20, 200, 400, 600, 800))+
+  labs(title = "Time response: P100", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_TR_P100.pdf"), width = 8, height=6, paper='special')
+dev.off()
+
+
+
+up = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/TR_P200.GseaPreranked.1643792367626/gsea_report_for_na_neg_1643792367626.tsv", sep = '\t', header = TRUE)
+down = read.table(file = "Paracetamol/RNAseq/Analysis/GSEA/TR_P200.GseaPreranked.1643792367626/gsea_report_for_na_pos_1643792367626.tsv", sep = '\t', header = TRUE)
+
+GSEAtrP200 = rbind(up,down)
+GSEAtrP200$NES = as.numeric(GSEAtrP200$NES)
+GSEAtrP200 = GSEAtrP200 %>% dplyr::filter(FDR.q.val< 0.1) %>% arrange(desc(abs(NES)))
+write.csv(GSEAtrP200, file="GSEAtrP200.csv")
+
+ggplot(GSEAtrP200[1:20,], aes(x = NES , y = reorder(NAME,NES), fill = SIZE))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(FDR.q.val, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(0,850), breaks = c(20, 200, 400, 600, 800))+
+  labs(title = "Time response: P200", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_TR_P200.pdf"), width = 8, height=6, paper='special')
+dev.off()
+
+```
+
+```{r Check counts and beta values D7D20}
+currentjob = "Boxplot"
+
+normcounts.df2 = normcounts.df
+normcounts.df2$ensembl_gene_id = rownames(normcounts.df)
+normcounts.df.annot = merge(normcounts.df2, myannot, by = "ensembl_gene_id")
+target
+
+geneListControl = c("CDH1", "CDH2", "DNMT3B", "ELAVL4", "EPCAM", "GAL", "GRIA1", "INA", "MAP6", "MYLK", "NANOG", "NHLH1", "PHC1", "PODXL", "PRRX1", "RAX","RELN",
+"SOX6", "TDGF1", "YAF2", "STMN2", "LIN28A", "DLX1", "NSG2", "ISL1", "SYT4", "ARX", "ASCL1", "DLX2", "GAD1", "GAD2", "GRIA2", "GSX1", "HES6", "INSM1", "JHY", "KRT18", "LHX9", "NEFM", "NEUROD4","NEUROG1", "NKX2-1","NSG1","NTRK3", "OTP", "PAMR1", "PAX6", "POU2F2", "RBFOX3", "SP9", "SPARCL1", "VEPH1", "ZIC2", "REST", "POU5F1", "LIX1", "PHC2", "CD24", "FOXH1", "FOXD3", "FABP7", "FZD5")
+
+normcountsGeneList = normcounts.df.annot %>% filter(external_gene_name %in% geneListControl) 
+
+normcountsGeneList = normcountsGeneList %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneList = merge(normcountsGeneList, target, by = "label")
+#normcountsGeneList$Group = factor(normcountsGeneList$Group, levels = c("Control_day_0","Control_day_7", "Control_day_13", "Control_day_20"))
+
+
+normcountsGeneList %>% ggplot(., aes(Group, NormalizedCounts)) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=d7d20cols) +
+  geom_point(aes(fill = as.factor(Group)), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts")+
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom") +
+  theme(axis.text.x = element_text(angle=90, size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_genelist_paracet_D7D20.pdf"), width = 20, height=18, paper='special')
+dev.off()
+
+#--------
+geneListControl = c("CDH2", "DNMT3A", "PAX7", "CACNA1D", "WNT7B", "GLI3","MECOM", "ABAT", "ANKRD6", "APOE")
+
+normcountsGeneList = normcounts.df.annot %>% dplyr::filter(external_gene_name %in% geneListControl) 
+
+normcountsGeneList = normcountsGeneList %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneList = merge(normcountsGeneList, target, by = "label")
+#normcountsGeneList$Group = factor(normcountsGeneList$Group, levels = c("Control_day_0","Control_day_7", "Control_day_13", "Control_day_20"))
+
+
+normcountsGeneList %>% ggplot(., aes(Group, NormalizedCounts)) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=d7d20cols) +
+  geom_point(aes(fill = as.factor(Group)), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts")+
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom") +
+  theme(axis.text.x = element_text(angle=90, size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_genelistOLTRP200_paracet.pdf"), width = 5, height=7, paper='special')
+dev.off()
+```
+
+
+```{r PCA plot all samples}
+###---------------------------------------------------------------------------------------------------------------
+#ALL SAMPLES
+targetFile <- "designAll.txt"                           # path to the design/target file
+rawDir <- "Paracetamol/RNAseq/20_featureCounts" 
+varInt <- "groups"                                    # factor of interest
+condRef <- "Ctrl0"                                      # reference biological condition
+
+
+# loading target file
+targetAll <- loadTargetFile(targetFile=targetFile, varInt=varInt, condRef=condRef, batch=NULL)
+
+# loading counts
+countsAll <- round(loadCountData(target=targetAll, rawDir=rawDir, featuresToRemove=NULL))
+
+targetAll$Group = factor(targetAll$Group)
+
+designAll = as.formula(~ Group)
+
+levels(targetAll$Group)
+targetAll$Group = factor(targetAll$Group, levels = c("Control_day_0", "Control_day_7", "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7", 
+                                                     "Control_day_13", "Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+targetAll$Day = as.factor(targetAll$Day)
+#modelMAtrix = model.matrix(design, data = target)
+
+dds <- DESeqDataSetFromMatrix(countData = countsAll,
+                                   colData = targetAll,
+                                   design = designAll)
+
+dds = DESeq(dds, fitType = "parametric")
+
+resultsNames(dds)
+#The interaction terms "Day20.Concentration100" and "Day20.Concentration200" give the difference between the Day effect (D20- D7) for a given Concentration (P100)  and the Day effect for the reference concentration (ctrl).
+#https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#interactions
+
+#PCA plot
+rld <- rlog(dds, blind=TRUE)
+
+pdf("PCA_day.pdf", width = 7, height = 7)
+plotPCA(rld, intgroup="Day", ntop = 1000) + scale_color_manual(values = daycols) + theme_few() + theme(legend.text = element_text(size = 6), legend.title = element_text(size = 8))
+dev.off()
+
+pdf("PCA_group.pdf", width = 7, height = 7)
+plotPCA(rld, intgroup="groups", ntop = 1000) + scale_color_manual(values = allCols) + theme_few() + theme(legend.text = element_text(size = 6), legend.title = element_text(size = 8))
+dev.off()
+
+
+#Hierarchial clustering
+rld_mat <- assay(rld) ### Extract the rlog matrix from the object
+rld_cor <- cor(rld_mat)    ### Compute pairwise correlation values
+head(rld_cor)   ## check the output of cor(), make note of the rownames and colnames
+
+pdf("Cluster_heatmap.pdf", height = 12, width = 11)
+pheatmap(rld_cor) ### Plot heatmap
+dev.off()
+```
+
+```{r functions}
+# Here's the stat_
+StatBag <- ggproto("Statbag", Stat,
+                   compute_group = function(data, scales, prop = 0.5) {
+                     
+                     #################################
+                     #################################
+                     # originally from aplpack package, plotting functions removed
+                     plothulls_ <- function(x, y, fraction, n.hull = 1,
+                                            col.hull, lty.hull, lwd.hull, density=0, ...){
+                       # function for data peeling:
+                       # x,y : data
+                       # fraction.in.inner.hull : max percentage of points within the hull to be drawn
+                       # n.hull : number of hulls to be plotted (if there is no fractiion argument)
+                       # col.hull, lty.hull, lwd.hull : style of hull line
+                       # plotting bits have been removed, BM 160321
+                       # pw 130524
+                       if(ncol(x) == 2){ y <- x[,2]; x <- x[,1] }
+                       n <- length(x)
+                       if(!missing(fraction)) { # find special hull
+                         n.hull <- 1
+                         if(missing(col.hull)) col.hull <- 1
+                         if(missing(lty.hull)) lty.hull <- 1
+                         if(missing(lwd.hull)) lwd.hull <- 1
+                         x.old <- x; y.old <- y
+                         idx <- chull(x,y); x.hull <- x[idx]; y.hull <- y[idx]
+                         for( i in 1:(length(x)/3)){
+                           x <- x[-idx]; y <- y[-idx]
+                           if( (length(x)/n) < fraction ){
+                             return(cbind(x.hull,y.hull))
+                           }
+                           idx <- chull(x,y); x.hull <- x[idx]; y.hull <- y[idx];
+                         }
+                       }
+                       if(missing(col.hull)) col.hull <- 1:n.hull
+                       if(length(col.hull)) col.hull <- rep(col.hull,n.hull)
+                       if(missing(lty.hull)) lty.hull <- 1:n.hull
+                       if(length(lty.hull)) lty.hull <- rep(lty.hull,n.hull)
+                       if(missing(lwd.hull)) lwd.hull <- 1
+                       if(length(lwd.hull)) lwd.hull <- rep(lwd.hull,n.hull)
+                       result <- NULL
+                       for( i in 1:n.hull){
+                         idx <- chull(x,y); x.hull <- x[idx]; y.hull <- y[idx]
+                         result <- c(result, list( cbind(x.hull,y.hull) ))
+                         x <- x[-idx]; y <- y[-idx]
+                         if(0 == length(x)) return(result)
+                       }
+                       result
+                     } # end of definition of plothulls
+                     #################################
+                     
+                     
+                     # prepare data to go into function below
+                     the_matrix <- matrix(data = c(data$x, data$y), ncol = 2)
+                     
+                     # get data out of function as df with names
+                     setNames(data.frame(plothulls_(the_matrix, fraction = prop)), nm = c("x", "y"))
+                     # how can we get the hull and loop vertices passed on also?
+                   },
+                   
+                   required_aes = c("x", "y")
+)
+
+# Here's the stat_ function
+#' @inheritParams ggplot2::stat_identity
+#' @param prop Proportion of all the points to be included in the bag (default is 0.5)
+stat_bag <- function(mapping = NULL, data = NULL, geom = "polygon",
+                     position = "identity", na.rm = FALSE, show.legend = NA, 
+                     inherit.aes = TRUE, prop = 0.5, alpha = 0.3, ...) {
+  layer(
+    stat = StatBag, data = data, mapping = mapping, geom = geom, 
+    position = position, show.legend = show.legend, inherit.aes = inherit.aes,
+    params = list(na.rm = na.rm, prop = prop, alpha = alpha, ...)
+  )
+}
+
+# here's the geom_
+geom_bag <- function(mapping = NULL, data = NULL,
+                     stat = "identity", position = "identity",
+                     prop = 0.5, 
+                     alpha = 0.3,
+                     ...,
+                     na.rm = FALSE,
+                     show.legend = NA,
+                     inherit.aes = TRUE) {
+  layer(
+    data = data,
+    mapping = mapping,
+    stat = StatBag,
+    geom = GeomBag,
+    position = position,
+    show.legend = show.legend,
+    inherit.aes = inherit.aes,
+    params = list(
+      na.rm = na.rm,
+      alpha = alpha,
+      prop = prop,
+      ...
+    )
+  )
+}
+
+#' @rdname ggplot2-ggproto
+#' @format NULL
+#' @usage NULL
+#' @export
+GeomBag <- ggproto("GeomBag", Geom,
+                   draw_group = function(data, panel_scales, coord) {
+                     n <- nrow(data)
+                     if (n == 1) return(zeroGrob())
+                     
+                     munched <- coord_munch(coord, data, panel_scales)
+                     # Sort by group to make sure that colors, fill, etc. come in same order
+                     munched <- munched[order(munched$group), ]
+                     
+                     # For gpar(), there is one entry per polygon (not one entry per point).
+                     # We'll pull the first value from each group, and assume all these values
+                     # are the same within each group.
+                     first_idx <- !duplicated(munched$group)
+                     first_rows <- munched[first_idx, ]
+                     
+                     ggplot2:::ggname("geom_bag",
+                                      grid:::polygonGrob(munched$x, munched$y, default.units = "native",
+                                                         id = munched$group,
+                                                         gp = grid::gpar(
+                                                           col = first_rows$colour,
+                                                           fill = alpha(first_rows$fill, first_rows$alpha),
+                                                           lwd = first_rows$size * .pt,
+                                                           lty = first_rows$linetype
+                                                         )
+                                      )
+                     )
+                     
+                     
+                   },
+                   
+                   default_aes = aes(colour = "NA", fill = "grey20", size = 0.5, linetype = 1,
+                                     alpha = NA, prop = 0.5),
+                   
+                   handle_na = function(data, params) {
+                     data
+                   },
+                   
+                   required_aes = c("x", "y"),
+                   
+                   draw_key = draw_key_polygon
+)
+
+
+
+
+# function for plotting
+heat_scree_plot<-function(Loadings, Importance){
+  adjust<-1-Importance[1]
+  pca_adjusted<-Importance[2:length(Importance)]/adjust
+  pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted)))
+  
+  scree<-ggplot(pca_df[which(pca_df$PC<13),],aes(PC,adjusted_variance))+geom_bar(stat = "identity",color="black",fill="grey")+theme_bw()+
+    theme(axis.text = element_text(size =12),
+          axis.title = element_text(size =15),
+          plot.margin=unit(c(1,1.5,0.2,2.25),"cm"))+ylab("Adjusted Variance")+
+    scale_x_continuous(breaks = seq(1,20,1))
+  
+  #### Heat
+  ## correlate meta with PCS
+  ## Run anova of each PC on each meta data variable
+  
+  aov_PC_meta<-lapply(1:ncol(meta_categorical), function(covar) sapply(1:ncol(Loadings), function(PC) summary(aov(Loadings[,PC]~meta_categorical[,covar]))[[1]]$"Pr(>F)"[1]))
+  cor_PC_meta<-lapply(1:ncol(meta_continuous), function(covar) sapply(1:ncol(Loadings), function(PC) (cor.test(Loadings[,PC],as.numeric(meta_continuous[,covar]),alternative = "two.sided", method="spearman", na.action=na.omit)$p.value)))
+  names(aov_PC_meta)<-colnames(meta_categorical)
+  names(cor_PC_meta)<-colnames(meta_continuous)
+  aov_PC_meta<-do.call(rbind, aov_PC_meta)
+  cor_PC_meta<-do.call(rbind, cor_PC_meta)
+  aov_PC_meta<-rbind(aov_PC_meta, cor_PC_meta)
+  aov_PC_meta<-as.data.frame(aov_PC_meta)
+  
+  #adjust
+  aov_PC_meta_adjust<-aov_PC_meta[,2:ncol(aov_PC_meta)]
+  
+  #reshape
+  avo<-aov_PC_meta_adjust[,1:12]
+  avo_heat_num<-apply(avo,2, as.numeric)
+  avo_heat<-as.data.frame(avo_heat_num)
+  colnames(avo_heat)<-sapply(1:12, function(x) paste("PC",x, sep=""))
+  avo_heat$meta<-rownames(avo)
+  avo_heat_melt<-melt(avo_heat, id=c("meta"))
+  head(avo_heat_melt)
+  
+  # cluster meta data
+  ord <- c(1:30)
+  meta_var_order<-unique(avo_heat_melt$meta)[rev(ord)]
+  avo_heat_melt$meta <- factor(avo_heat_melt$meta, levels = meta_var_order)
+  
+  # color if sig
+  # avo_heat_melt$Pvalue<-sapply(1:nrow(avo_heat_melt), function(x) if(avo_heat_melt$value[x]>=0.9){">=0.9"}else{
+  # if(avo_heat_melt$value[x]>=0.5){">=0.5"}else{
+  # if(avo_heat_melt$value[x]>=0.1){">=0.1"}else{"<0.1"}}})
+  avo_heat_melt$Pvalue<-sapply(1:nrow(avo_heat_melt), function(x) if(avo_heat_melt$value[x]<=0.001){"<=0.001"}else{
+    if(avo_heat_melt$value[x]<=0.01){"<=0.01"}else{
+      if(avo_heat_melt$value[x]<=0.05){"<=0.05"}else{">0.05"}}})
+  
+  heat<-ggplot(avo_heat_melt, aes(variable,meta, fill = Pvalue)) +
+    geom_tile(color = "black",size=0.5) +
+    theme_gray(8)+scale_fill_manual(values=c("#084594","#4292c6","#9ecae1","#deebf7"))+
+    theme(axis.text = element_text(size =10, color="black"),
+          axis.text.x = element_text(),
+          axis.title = element_text(size =15),
+          legend.text = element_text(size =14),
+          legend.title = element_text(size =12),
+          legend.position = c(1, 0), legend.justification = c(1,0),
+          plot.margin=unit(c(0,2.25,1,1),"cm"))+
+    xlab("Adjusted Principal Component")+ylab(NULL)
+  
+  grid.arrange(scree, heat, ncol=1,  heights = c(2, 4))
+}
+
+
+```
+
+```{r PCA clustering}
+all(colnames(rld_mat) == targetAll$label)
+
+pcaParacet = prcomp(na.omit(rld_mat), center = TRUE, scale = FALSE)
+summary(pcaParacet) #Proportion of Variance  PC1: 0.9902 PC2:0.00456  
+pcaParacet2 = as.data.frame(pcaParacet$rotation)
+pcaParacet2$label = rownames(pcaParacet2)
+pcaParacet2 = merge(pcaParacet2, targetAll, by = "label")
+
+
+p1 = ggplot(pcaParacet2, aes(PC1, PC2, colour=as.factor(Day), fill=as.factor(Day))) + 
+  geom_point(size=2, aes(shape = treatment)) + 
+  geom_bag(prop = 0.95)+
+  scale_color_manual(values = daycols) +
+  scale_fill_manual(values = daycols) +
+  ggtitle("Day")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  xlab("PC1 (99.02%)")+
+  ylab("PC2 (0.005%)") +
+  theme_few()
+
+p1
+dev.copy(pdf,paste0("pca-rldmat_day_treat.pdf"), width = 6.5, height=5, paper='special')
+dev.off()
+```
+
+
+```{r Check counts and beta values for genelist all samples}
+currentjob = "Boxplot"
+
+#Extract normalized counts
+normCountsAll = counts(dds, normalized = TRUE)
+save(normCountsAll, file = "Paracetamol/RNAseq/analysis/normcountsAll.RData")
+
+normcountsAll.df = as.data.frame(normCountsAll)
+normcountsAll.df$ensembl_gene_id = rownames(normcountsAll.df)
+normcountsAll.df.annot = merge(normcountsAll.df, myannot, by = "ensembl_gene_id")
+
+geneListControl = c("CDH1", "CDH2", "DNMT3B", "ELAVL4", "EPCAM", "GAL", "GRIA1", "INA", "MAP6", "MYLK", "NANOG", "NHLH1", "PHC1", "PODXL", "PRRX1", "RAX","RELN",
+"SOX6", "TDGF1", "YAF2", "STMN2", "LIN28A", "DLX1", "NSG2", "ISL1", "SYT4", "ARX", "ASCL1", "DLX2", "GAD1", "GAD2", "GRIA2", "GSX1", "HES6", "INSM1", "JHY", "KRT18", "LHX9", "NEFM", "NEUROD4","NEUROG1", "NKX2-1","NSG1","NTRK3", "OTP", "PAMR1", "PAX6", "POU2F2", "RBFOX3", "SP9", "SPARCL1", "VEPH1", "ZIC2", "REST", "POU5F1", "LIX1", "PHC2", "CD24", "FOXH1", "FOXD3", "FABP7", "FZD5")
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% geneListControl) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelist_paracet_ALL.pdf"), width = 21, height=18, paper='special')
+dev.off()
+
+#TR p100---------------------
+resTR100annot =resTR100annot[order(resTR100annot$pvalue),] #Order results after pvalue
+geneList = resTR100annot$external_gene_name[1:90]
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% geneList) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_TopTRp100_paracet_ALL.pdf"), width = 30, height=28, paper='special')
+dev.off()
+
+
+#TR p200---------------------
+resTR200annot =resTR200annot[order(resTR200annot$pvalue),] #Order results after pvalue
+geneList = resTR200annot$external_gene_name[1:100]
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% geneList) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_TopTRp200_paracet_ALL.pdf"), width =30, height=30, paper='special')
+dev.off()
+
+#NEXT 50 TRP200
+resTR200annot =resTR200annot[order(resTR200annot$pvalue),] #Order results after pvalue
+geneList = resTR200annot$external_gene_name[101:200]
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% geneList) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_TopTRp200B_paracet_ALL.pdf"), width = 30, height=30, paper='special')
+dev.off()
+
+#NEXT 100 TRP200
+resTR200annot =resTR200annot[order(resTR200annot$pvalue),] #Order results after pvalue
+geneList = resTR200annot$external_gene_name[201:300]
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% geneList) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_TopTRp200C_paracet_ALL.pdf"), width = 30, height=30, paper='special')
+dev.off()
+
+#NEXT 100 TRP200
+resTR200annot =resTR200annot[order(resTR200annot$pvalue),] #Order results after pvalue
+geneList = resTR200annot$external_gene_name[301:400]
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% geneList) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_TopTRp200D_paracet_ALL.pdf"), width = 30, height=30, paper='special')
+dev.off()
+
+#NEXT 100 TRP200
+
+resTR200annot =resTR200annot[order(resTR200annot$pvalue),] #Order results after pvalue
+geneList = resTR200annot$external_gene_name[401:500]
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% geneList) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_TopTRp200E_paracet_ALL.pdf"), width = 30, height=30, paper='special')
+dev.off()
+
+#TR overlap P100 p200---------------------
+geneList = intersect(TRp100.degs, TRp200.degs)
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(ensembl_gene_id %in% geneList) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_TopTR_OL_paracet_ALL.pdf"), width = 21, height=18, paper='special')
+dev.off()
+
+#--------------
+geneListControl = c("PCNA", "GJA1", "MKI67", "REST", "CDK1", "CDKN1C", "GBX2")
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% geneListControl) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelistAthina_paracet_ALL.pdf"), width = 6, height=6, paper='special')
+dev.off()
+
+#---MOBA overlap-----------------
+
+Day20DEGs = c(D20p100.degs,D20p200.degs ,D20P200vsp100.degs)
+Day20DEGs = subset(myannot, subset = myannot$ensembl_gene_id %in% Day20DEGs)
+dim(Day20DEGs) #2184 genes
+
+
+moba = read.csv("MoBA_expADHDvscontrol.csv", header = F)
+s = strsplit(moba$V1, split = ";")
+
+uniqueGenes = data.frame(external_gene_name = unlist(s))
+moba_uniqueGenes = uniqueGenes[!duplicated(uniqueGenes[c(names(uniqueGenes))]),] 
+length(moba_uniqueGenes) #4063 genes
+
+D20_moba_ol = intersect(Day20DEGs$external_gene_name, moba_uniqueGenes) #370 genes
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% D20_moba_ol[1:100]) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelistP-day20_moba_overlap.pdf"), width = 30, height=30, paper='special')
+dev.off()
+
+#B
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% D20_moba_ol[101:200]) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelistP-day20_moba_overlapB.pdf"), width = 30, height=30, paper='special')
+dev.off()
+
+#C
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% D20_moba_ol[201:300]) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelistP-day20_moba_overlapC.pdf"), width = 30, height=30, paper='special')
+dev.off()
+
+#D
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% D20_moba_ol[301:370]) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelistP-day20_moba_overlapD.pdf"), width = 30, height=25, paper='special')
+dev.off()
+
+
+#RNAseq genes Moba overlap compared with DNAm genes overlap
+CpGoverlap = read_csv("CpG_overlap_MoBa.csv")
+CpGoverlap = CpGoverlap$external_gene_name
+
+Gene_CpGoverlap = intersect(CpGoverlap, D20_moba_ol) #20 genes
+
+normcountsGeneListALL = normcountsAll.df.annot %>% dplyr::filter(external_gene_name %in% Gene_CpGoverlap) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelistP-day20_moba_CpG-gene_overlap.pdf"), width = 9, height=7, paper='special')
+dev.off()
+
+
+write_csv(as.data.frame(Gene_CpGoverlap), "Gene_CpGoverlap_MoBa.csv")
+
+
+#Moba ADHD overlap-------------------
+
+dim(Day20DEGs) #2184 genes
+
+
+mobaADHD = read.csv("MoBA_expADHDvsADHDcontrol.csv", header = F)
+s = strsplit(mobaADHD$V1, split = ";")
+
+uniqueGenes = data.frame(external_gene_name = unlist(s))
+moba_uniqueGenes = uniqueGenes[!duplicated(uniqueGenes[c(names(uniqueGenes))]),] 
+length(moba_uniqueGenes) #4063 genes
+
+D20_moba_ol = intersect(Day20DEGs$external_gene_name, moba_uniqueGenes) #9 genes
+
+normcountsGeneListALL = normcountsAll.df.annot %>% filter(external_gene_name %in% D20_moba_ol) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelistP-day20_mobaADHD_overlap.pdf"), width =7, height=7, paper='special')
+dev.off()
+
+
+#RNAseq genes MobaADHD overlap compared with DNAm genes overlap
+CpGoverlap = read_csv("CpG_overlap_MoBaADHD.csv")
+CpGoverlap = CpGoverlap$external_gene_name
+
+Gene_CpGoverlap = intersect(CpGoverlap, D20_moba_ol) #1 genes
+
+normcountsGeneListALL = normcountsAll.df.annot %>% dplyr::filter(external_gene_name %in% Gene_CpGoverlap) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  #geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black") +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelistP-day20_mobaADHD_CpG-gene_overlap.pdf"), width = 3, height=3, paper='special')
+dev.off()
+
+
+write_csv(as.data.frame(Gene_CpGoverlap), "Gene_CpGoverlap_MoBaADHD.csv")
+
+#------
+geneListTRoverlap = c("CDH2", "DNMT3A", "PAX7", "CACNA1D", "WNT7B", "GLI3","MECOM", "ABAT", "ANKRD6", "GRIK3", "MAPT")
+
+normcountsGeneListALL = normcountsAll.df.annot %>% dplyr::filter(external_gene_name %in% geneListTRoverlap) 
+
+normcountsGeneListALL = normcountsGeneListALL %>%  pivot_longer(cols = -c(external_gene_name, ensembl_gene_id, chromosome_name, start_position, end_position), names_to = "label", values_to = "NormalizedCounts" )
+
+normcountsGeneListALL = merge(normcountsGeneListALL, targetAll, by = "label")
+
+normcountsGeneListALL %>% ggplot(., aes(as.factor(Day), NormalizedCounts), group = Concentration) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=allCols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", size = 0.8) +
+  labs(x = "", y = "Normalized counts") +
+  guides(fill=guide_legend(title="Group")) +
+  scale_y_continuous(limits=c(0, NA)) + 
+  facet_wrap(~ external_gene_name, scales = "free_y") +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0(currentjob,"_genelist_TR_overlap.pdf"), width = 7, height=6, paper='special')
+dev.off()
+```
+
+
+```{r Heatmap}
+#Time response, genes overlaping between P100 and P200 ---------------------------------------------------
+TRol = subset(myannot, select = external_gene_name, subset = ensembl_gene_id %in% intersect(TRp100.degs, TRp200.degs))
+TRol = TRol$external_gene_name
+
+normcountsTRol = normcounts.df.annot %>% dplyr::filter(normcounts.df.annot$external_gene_name %in% TRol) %>% dplyr::select(contains("D7") | contains("D20") | ensembl_gene_id |external_gene_name) %>% dplyr::select(!ensembl_gene_id) #Select top 50 genes normalized counts
+rownames(normcountsTRol) = normcountsTRol$external_gene_name #External gene name as rownames
+normcountsTRol = normcountsTRol %>% dplyr::select(!external_gene_name) %>% log2(.) #Convert to log(normcounts)
+normcountsTRol[normcountsTRol == -Inf] = 0 #Convert infinite values to 0
+
+annotation_col = data.frame(Group = factor(rep(c("D7_ctrl", "D7_P100", "D7_P200", "D20_ctrl", "D20_P100","D20_P200"), c(6,5, 5, 4, 4,6)))) #Annotation data frame
+rownames(annotation_col) = colnames(normcountsTRol)
+annColor = list(Group = c("D7_ctrl" = "#B60A1C", "D7_P100" = "#FFD700", "D7_P200" = "#8CC2CA", "D20_ctrl" = "#C0D6E4", "D20_P100" = "#D37295","D20_P200" = "#8175AA")) #Color data frame
+
+p2 = pheatmap(normcountsTRol,treeheight_row = 0, annotation_col = annotation_col, annotation_colors = annColor, name = "log2(normalized expression)", show_colnames = F, annotation_legend =T) #heatmap
+
+pdf("heatmat_TR_OL.pdf", height = 10, width = 8)
+p2
+dev.off()
+
+# -Top 50 TRp200--------------------------------------------------
+TRp200top50 = subset(myannot, select = external_gene_name, subset = ensembl_gene_id %in% rownames(resTR200[1:50,]))
+TRp200top50 = TRp200top50$external_gene_name
+
+normcountsTRp200top50 = normcounts.df.annot %>% dplyr::filter(normcounts.df.annot$external_gene_name %in% TRp200top50) %>% dplyr::select(contains("D7") | contains("D20") | ensembl_gene_id |external_gene_name) %>% dplyr::select(!ensembl_gene_id) #Select top 50 genes normalized counts
+normcountsTRp200top50 = normcountsTRp200top50[-46,]
+
+rownames(normcountsTRp200top50) = normcountsTRp200top50$external_gene_name #External gene name as rownames
+normcountsTRp200top50 = normcountsTRp200top50 %>% dplyr::select(!external_gene_name) %>% log2(.) #Convert to log(normcounts)
+normcountsTRp200top50[normcountsTRp200top50 == -Inf] = 0 #Convert infinite values to 0
+
+annotation_col = data.frame(Group = factor(rep(c("D7_ctrl", "D7_P100", "D7_P200", "D20_ctrl", "D20_P100","D20_P200"), c(6,5, 5, 4, 4,6)))) #Annotation data frame
+rownames(annotation_col) = colnames(normcountsTRp200top50)
+annColor = list(Group = c("D7_ctrl" = "#B60A1C", "D7_P100" = "#FFD700", "D7_P200" = "#8CC2CA", "D20_ctrl" = "#C0D6E4", "D20_P100" = "#D37295","D20_P200" = "#8175AA")) #Color data frame
+
+#D0D7top50 = D0D7top50[order(match(D0D7top50$external_gene_name, rownames(normcountsD0D7))), , drop = FALSE] #Order normcounts same as top50
+#identical(D0D7top50$external_gene_name, rownames(normcountsD0D7)) #Check that they are same order
+
+#p1 = rowAnnotation(FoldChange = anno_barplot(D0D7top50$log2FoldChange)) #Fold change plot
+p2 = pheatmap(normcountsTRp200top50,treeheight_row = 0, annotation_col = annotation_col, annotation_colors = annColor, name = "log2(normalized expression)", show_colnames = F, annotation_legend =T) #heatmap
+
+pdf("heatmat_TRP200_top50.pdf", height = 10, width = 8)
+p2
+dev.off()
+
+
+```
+```{r}
+sessionInfo()
+```
+
+

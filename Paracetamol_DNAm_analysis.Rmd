@@ -1,0 +1,3079 @@
+---
+title: "Methylation Analysis - Paracetamol"
+author: "MS"
+date: "25/02/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, root.dir ="/Paracetamol/Methylation/bulkdata/analysis/AllSamples", echo = TRUE)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+#BiocManager::install("RnBeads")
+library(RnBeads)
+#install.packages("knitr")
+library(knitr)
+library(limma)
+library(minfi)
+
+#BiocManager::install("IlluminaHumanMethylationEPICanno.ilm10b3.hg19")
+#library(IlluminaHumanMethylationEPICanno.ilm10b3.hg19)
+#BiocManager::install("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+#library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+#BiocManager::install("IlluminaHumanMethylationEPICmanifest")
+library(IlluminaHumanMethylationEPICmanifest)
+#library(IlluminaHumanMethylationEPICanno.ilm10b2.hg19)
+library(RColorBrewer)
+#BiocManager::install("missMethyl")
+library(missMethyl)
+#library(Gviz)
+#install.packages("Hmisc", type="binary")
+#library(Hmisc)
+#BiocManager::install("DMRcate")
+library(DMRcate)
+library(stringr)
+library(ggplot2)
+library(reshape2)
+#install.packages("devtools")
+library(devtools)
+#install.packages("ps", type="binary")
+#library(ps)
+#BiocManager::install("minfiData")
+library(minfiData)
+#devtools::install_github("markgene/maxprobes")
+library("maxprobes")
+#install.packages("remotes")
+library(remotes)
+#install.packages("rapportools")
+library(rapportools)
+library(dplyr)
+#install.packages("tidyverse")
+library(tidyverse)
+library(gplots)
+#BiocManager::install("ChAMP")
+library(ChAMP)
+#install.packages("ggrepel")
+library(ggrepel)
+library(colorspace)
+#BiocManager::install("methylGSA")
+#BiocManager::install("reactome.db")
+#install.packages("farver", type="binary")
+library(methylGSA)
+library("ggforce")
+library(GenomicFeatures)
+#BiocManager::install("ggbio")
+library(ggbio)
+#BiocManager::install("Homo.sapiens")
+library(Homo.sapiens)
+#library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+#BiocManager::install("TxDb.Hsapiens.UCSC.hg38.knownGene")
+#library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(biovizBase)
+#BiocManager::install("GenomicRanges")
+library("GenomicRanges")
+#install_github("achilleasNP/IlluminaHumanMethylationEPICanno.ilm10b5.hg38")
+library(IlluminaHumanMethylationEPICanno.ilm10b5.hg38)
+library(ensembldb)
+#BiocManager::install("EnsDb.Hsapiens.v86")
+library(EnsDb.Hsapiens.v86) # this pkg is about 75 Mb
+#install_github("jokergoo/ComplexHeatmap", force = TRUE)
+library(ComplexHeatmap)
+#install.packages(c("FactoMineR", "factoextra"))
+library("FactoMineR")
+library("factoextra")
+library(ggpubr)
+library(circlize)
+#install.packages("ggthemes")
+library(ggthemes)
+#if (!require(devtools)) install.packages("devtools")
+#devtools::install_github("yanlinlin82/ggvenn") 
+library(VennDiagram)
+#BiocManager::install('EnhancedVolcano')
+library(EnhancedVolcano)
+#install.packages("GenABEL.data", repos="http://R-Forge.R-project.org")
+#install.packages("GenABEL_1.8-0.tar.gz", repos = NULL)
+library(GenABEL.data)
+
+groupcols =  c("#FF9888",  "#B60A1C", "#FFD700", "#8CC2CA","#C3CE3D","#C0D6E4", "#D37295", "#8175AA")
+daycols = c("#FF9888", "#B60A1C", "#C3CE3D","#C0D6E4")
+colpal = c("#D37295","#FF9888","#8175AA","#DAB6AF","#FFC966","#C3CE3D","#8CC2CA","#59A14F","#CCCCCC","#008080","#C0D6E4","#FFD700","#A3ACB9","#F28E2B","#B60A1C","#8A494D","#C8D0D9")
+
+```
+
+# Load data
+
+```{r Read in data, warning=FALSE}
+baseDir = system.file("Paracetamol/Methylation/bulkdata/idat")
+
+targets = read.metharray.sheet("/Paracetamol/Methylation/bulkdata/idat") # put samplesheet with iDat files
+rgSet = read.metharray.exp(targets=targets)
+
+
+sampleNames(rgSet) = targets$Sample_Name # give the samples discriptive names
+rgSet
+#save(rgSet, file = "Paracetamol/Methylation/bulkdata/analysis/AllSamples/rgSet.RData")
+```
+
+
+# Annotation
+
+```{r get annotation for downstream analysis}
+
+rgSet@annotation = c(array = "IlluminaHumanMethylationEPIC", annotation = "ilm10b5.hg38")
+
+# get the EPIC annotation data
+annoEPIC = getAnnotation(IlluminaHumanMethylationEPICanno.ilm10b5.hg38)
+
+#head(annoEPIC)
+annoEPIC = as.data.frame(annoEPIC)
+annoEPIC$cgid=row.names(annoEPIC)
+```
+
+```{r prepare for GEO}
+rgSetEx = read.metharray.exp(targets=targets, extended = TRUE)  #extended = TRUE for GEo submission
+
+# exclude control probes
+rgSetEx2 = subsetByLoci(rgSetEx, includeLoci = NULL, excludeLoci = NULL,
+             keepControls = TRUE, keepSnps = FALSE)
+
+#DoubleCheck that snp-probes are gone
+getManifest(rgSetEx2)
+getProbeInfo(object = rgSetEx,type = "SnpI")
+getProbeInfo(object = rgSetEx2,type = "SnpI")
+getProbeInfo(object = rgSetEx,type = "SnpII")
+getProbeInfo(object = rgSetEx2,type = "SnpII")
+getProbeInfo(object = rgSetEx,type = "Control")
+getProbeInfo(object = rgSetEx2,type = "Control")
+getProbeInfo(object = rgSetEx,type = "I")
+getProbeInfo(object = rgSetEx2,type = "I")
+getProbeInfo(object = rgSetEx,type = "II")
+getProbeInfo(object = rgSetEx2,type = "II")
+getProbeInfo(object = rgSetEx,type = "I-Green")
+getProbeInfo(object = rgSetEx2,type = "I-Green")
+getProbeInfo(object = rgSetEx,type = "I-Red")
+getProbeInfo(object = rgSetEx2,type = "I-Red")
+
+#save(rgSetEx2, file = "Paracetamol/Methylation/bulkdata/analysis/AllSamples/rgSetEx.RData")
+
+```
+
+# Quality Control
+
+```{r QC}
+# calculate the detection p-values
+detP = detectionP(rgSet)
+#head(detP)
+
+# complete QC pipeline in Minfi and generate QC report
+qcReport(rgSet, sampNames=targets$Sample_Name, sampGroups=targets$timepoint, pdf="qcReport.pdf") # can also specify sampGroups=targets$Group
+
+# remove poor quality samples
+keep = colMeans(detP) < 0.05
+rgSet = rgSet[,keep]
+rgSet
+
+# remove poor quality samples from targets data
+targets = targets[keep,]
+
+# remove poor quality samples from detection p-value table
+detP = detP[,keep]
+dim(detP)
+
+```
+
+# Normalization
+
+```{r Normalization}
+# normalize the data; this results in a GenomicRatioSet object
+# Functional normalization 
+# Note that this algorithm does not rely on any assumption and therefore can be be applicable for 
+# cases where global changes are expected such as in cancer-normal comparisons or tissue differences.
+
+mSetSq = preprocessFunnorm(rgSet) 
+
+# create a MethylSet object from the raw data for plotting
+mSetRaw = preprocessRaw(rgSet)
+
+```
+
+# Explore data
+
+```{r Explore data - PCA}
+
+par(mfrow=c(1,2))
+pal25 = c(
+  "dodgerblue2", "#E31A1C", # red
+  "green4",
+  "#6A3D9A", # purple
+  "#FF7F00", # orange
+  "black", "gold1",
+  "skyblue2", "#FB9A99", # lt pink
+  "palegreen2",
+  "#CAB2D6", # lt purple
+  "#FDBF6F", # lt orange
+  "gray70", "khaki2",
+  "maroon", "orchid1", "deeppink1", "blue1", "steelblue4",
+  "darkturquoise", "green1", "yellow4", "yellow3",
+  "darkorange4", "brown"
+)
+
+plotMDS(getM(mSetRaw), top=1000, gene.selection="common", main = "raw, unfiltered, colored by timepoint",
+        col=daycols[factor(targets$timepoint)])
+
+plotMDS(getM(mSetRaw), top=1000, gene.selection="common", main = "raw, unfiltered, colored by slide", 
+        col=pal25[factor(targets$Slide)])
+
+dev.copy(pdf, paste0("pca-top1000-timepoint-slide.pdf", width = 12, height = 7))
+dev.off()
+```
+
+# Filter probes
+```{r Filtering}
+# ensure probes are in the same order in the mSetSq and detP objects
+detP = detP[match(featureNames(mSetSq),rownames(detP)),] 
+
+# remove any probes that have failed in one or more samples
+keep = rowSums(detP < 0.01) == ncol(mSetSq) 
+table(keep) #12538
+
+mSetSqFlt = mSetSq[keep,]
+mSetSqFlt 
+
+# remove any probes that have failed in detP
+detP= detP[keep,]
+dim(detP)
+
+# exclude cross reactive probes 
+xloci = maxprobes::xreactive_probes(array_type = "EPIC")
+length(xloci) # 43256
+
+keep = !(featureNames(mSetSqFlt) %in% xloci) #42844 
+table(keep) #Keep 810477
+
+
+mSetSqFlt = mSetSqFlt[keep,] 
+mSetSqFlt 
+#save(mSetSqFlt, file="Paracetamol/Methylation/bulkdata/analysis/AllSamples/mSetSqFlt.RData")
+#load("Paracetamol/Methylation/bulkdata/analysis/AllSamples/mSetSqFlt.RData")
+
+# exclude cross reactive probes in detP
+detP= detP[keep,]
+dim(detP)
+
+targets$Group = factor(targets$Group, levels = c("Control_day_0","Control_day_7","100_uM_paracetamol_day_7" , "200_uM_paracetamol_day_7","Control_day_13",  "Control_day_20", "100_uM_paracetamol_day_20","200_uM_paracetamol_day_20"))
+targets$timepoint = factor(targets$timepoint, levels = c("0", "7", "13", "20"))
+
+# visualize MDS after filtering
+par(mfrow=c(1,3))
+plotMDS(getM(mSetSq), top=1000, gene.selection="common", main = "Normalized, unfiltered, colored by slide",
+        col=pal25[factor(targets$Slide)])
+
+plotMDS(getM(mSetSqFlt), top=1000, gene.selection="common", main = "Normalized, filtered, colored by slide",
+        col=pal25[factor(targets$Slide)])
+
+plotMDS(getM(mSetSqFlt), top=1000, gene.selection="common", main = "Normalized, filtered, colored by timepoint",
+        col=daycols[factor(targets$timepoint)])
+dev.copy(pdf,paste0("pca-normalized-filtered-top1000-timepoint-slide.pdf"), width = 17, height=7, paper='special')
+dev.off()
+
+
+pdf("PCAplot_day_group_filtered.pdf", width = 4, height = 4.5)
+plotMDS(getM(mSetSqFlt), top = 1000, gene.selection="common", pch = 16, cex = 1, col=daycols[factor(targets$timepoint)])
+legend("bottomright", legend=levels(targets$timepoint), col=daycols, pch = 16, cex = 0.5)
+
+pdf("PCAplot_group_filtered.pdf", width = 4, height = 4.5)
+limma::plotMDS(getM(mSetSqFlt), top = 1000, gene.selection="common",pch = 16,  col=groupcols[factor(targets$Group)], cex = 1)
+legend("bottomright", legend=levels(targets$Group), col=groupcols, pch = 16, ncol =2, cex = 0.5)
+dev.off()
+
+```
+
+# Calculate m-values and beta-values
+```{r Calculate m-vals and betas}
+##-----------------------------------------------
+# calculate M-values for statistical analysis and 
+# beta values for downstream plotting
+##-----------------------------------------------
+mVals = getM(mSetSqFlt)
+head(mVals[,1:5])
+
+betas = getBeta(mSetSqFlt)
+head(betas[,1:5])
+
+annoEPICsub <- annoEPIC[match(rownames(mVals),annoEPIC$Name),
+                        c(1:4,9, 12:19,22,24, 26, 31,37,49:ncol(annoEPIC))]
+#head(annoEPICsub)
+
+nonCpG = annoEPIC[grepl("ch",annoEPIC$Name),]
+```
+
+#Create data matrix for GEO submission
+```{r GEO, eval=FALSE, include=FALSE}
+# ensure probes are in the same order in the betas_ctrl and detP_ctrl objects
+detP = detP[match(rownames(betas),rownames(detP)),] 
+
+write.table(detP, "detP_ctrl.txt", sep = "\t")
+write.table(betas, "betas_ctrl.txt", sep = "\t")
+
+betas = as.data.frame(betas)
+betas= betas %>% rename_all(paste0, "_Betas")
+detP = as.data.frame(detP)
+detP = detP %>% rename_all(paste0, "_detP")
+
+identical(rownames(betas), rownames(detP))
+
+betas_detP = cbind(betas,detP)
+dim(betas_detP)
+
+betas_detP = betas_detP %>% dplyr::select(sort(names(.)))
+write.table(betas_detP, "betas_detP.txt", sep = "\t")
+
+### Raw signal intensities
+meth = getMeth(mSetRaw)
+dim(meth)
+meth = as.data.frame(meth)
+meth = meth %>% rename_all(paste0, "_Methylated_signal")
+
+unmeth = getUnmeth(mSetRaw)
+dim(unmeth)
+unmeth = as.data.frame(unmeth)
+unmeth = unmeth %>% rename_all(paste0, "_Unmethylated_signal")
+
+detP_all = detectionP(rgSet)
+dim(detP_all)
+detP_all = as.data.frame(detP_all)
+detP_all = detP_all %>% rename_all(paste0, "_detection-Pval")
+
+identical(rownames(meth), rownames(unmeth))
+identical(rownames(meth), rownames(detP_all))
+
+meth_unmeth_detP = cbind(meth, unmeth, detP_all)
+dim(meth_unmeth_detP)
+meth_unmeth_detP = meth_unmeth_detP %>% dplyr::select(sort(names(.)))
+write.table(meth_unmeth_detP, "meth_unmeth_detP.txt", sep = "\t")
+```
+
+
+```{r PCA statbag functions}
+# Here's the stat_
+StatBag <- ggproto("Statbag", Stat,
+                   compute_group = function(data, scales, prop = 0.5) {
+                     
+                     #################################
+                     #################################
+                     # originally from aplpack package, plotting functions removed
+                     plothulls_ <- function(x, y, fraction, n.hull = 1,
+                                            col.hull, lty.hull, lwd.hull, density=0, ...){
+                       # function for data peeling:
+                       # x,y : data
+                       # fraction.in.inner.hull : max percentage of points within the hull to be drawn
+                       # n.hull : number of hulls to be plotted (if there is no fractiion argument)
+                       # col.hull, lty.hull, lwd.hull : style of hull line
+                       # plotting bits have been removed, BM 160321
+                       # pw 130524
+                       if(ncol(x) == 2){ y <- x[,2]; x <- x[,1] }
+                       n <- length(x)
+                       if(!missing(fraction)) { # find special hull
+                         n.hull <- 1
+                         if(missing(col.hull)) col.hull <- 1
+                         if(missing(lty.hull)) lty.hull <- 1
+                         if(missing(lwd.hull)) lwd.hull <- 1
+                         x.old <- x; y.old <- y
+                         idx <- chull(x,y); x.hull <- x[idx]; y.hull <- y[idx]
+                         for( i in 1:(length(x)/3)){
+                           x <- x[-idx]; y <- y[-idx]
+                           if( (length(x)/n) < fraction ){
+                             return(cbind(x.hull,y.hull))
+                           }
+                           idx <- chull(x,y); x.hull <- x[idx]; y.hull <- y[idx];
+                         }
+                       }
+                       if(missing(col.hull)) col.hull <- 1:n.hull
+                       if(length(col.hull)) col.hull <- rep(col.hull,n.hull)
+                       if(missing(lty.hull)) lty.hull <- 1:n.hull
+                       if(length(lty.hull)) lty.hull <- rep(lty.hull,n.hull)
+                       if(missing(lwd.hull)) lwd.hull <- 1
+                       if(length(lwd.hull)) lwd.hull <- rep(lwd.hull,n.hull)
+                       result <- NULL
+                       for( i in 1:n.hull){
+                         idx <- chull(x,y); x.hull <- x[idx]; y.hull <- y[idx]
+                         result <- c(result, list( cbind(x.hull,y.hull) ))
+                         x <- x[-idx]; y <- y[-idx]
+                         if(0 == length(x)) return(result)
+                       }
+                       result
+                     } # end of definition of plothulls
+                     #################################
+                     
+                     
+                     # prepare data to go into function below
+                     the_matrix <- matrix(data = c(data$x, data$y), ncol = 2)
+                     
+                     # get data out of function as df with names
+                     setNames(data.frame(plothulls_(the_matrix, fraction = prop)), nm = c("x", "y"))
+                     # how can we get the hull and loop vertices passed on also?
+                   },
+                   
+                   required_aes = c("x", "y")
+)
+
+# Here's the stat_ function
+#' @inheritParams ggplot2::stat_identity
+#' @param prop Proportion of all the points to be included in the bag (default is 0.5)
+stat_bag <- function(mapping = NULL, data = NULL, geom = "polygon",
+                     position = "identity", na.rm = FALSE, show.legend = NA, 
+                     inherit.aes = TRUE, prop = 0.5, alpha = 0.3, ...) {
+  layer(
+    stat = StatBag, data = data, mapping = mapping, geom = geom, 
+    position = position, show.legend = show.legend, inherit.aes = inherit.aes,
+    params = list(na.rm = na.rm, prop = prop, alpha = alpha, ...)
+  )
+}
+
+# here's the geom_
+geom_bag <- function(mapping = NULL, data = NULL,
+                     stat = "identity", position = "identity",
+                     prop = 0.5, 
+                     alpha = 0.3,
+                     ...,
+                     na.rm = FALSE,
+                     show.legend = NA,
+                     inherit.aes = TRUE) {
+  layer(
+    data = data,
+    mapping = mapping,
+    stat = StatBag,
+    geom = GeomBag,
+    position = position,
+    show.legend = show.legend,
+    inherit.aes = inherit.aes,
+    params = list(
+      na.rm = na.rm,
+      alpha = alpha,
+      prop = prop,
+      ...
+    )
+  )
+}
+
+#' @rdname ggplot2-ggproto
+#' @format NULL
+#' @usage NULL
+#' @export
+GeomBag <- ggproto("GeomBag", Geom,
+                   draw_group = function(data, panel_scales, coord) {
+                     n <- nrow(data)
+                     if (n == 1) return(zeroGrob())
+                     
+                     munched <- coord_munch(coord, data, panel_scales)
+                     # Sort by group to make sure that colors, fill, etc. come in same order
+                     munched <- munched[order(munched$group), ]
+                     
+                     # For gpar(), there is one entry per polygon (not one entry per point).
+                     # We'll pull the first value from each group, and assume all these values
+                     # are the same within each group.
+                     first_idx <- !duplicated(munched$group)
+                     first_rows <- munched[first_idx, ]
+                     
+                     ggplot2:::ggname("geom_bag",
+                                      grid:::polygonGrob(munched$x, munched$y, default.units = "native",
+                                                         id = munched$group,
+                                                         gp = grid::gpar(
+                                                           col = first_rows$colour,
+                                                           fill = alpha(first_rows$fill, first_rows$alpha),
+                                                           lwd = first_rows$size * .pt,
+                                                           lty = first_rows$linetype
+                                                         )
+                                      )
+                     )
+                     
+                     
+                   },
+                   
+                   default_aes = aes(colour = "NA", fill = "grey20", size = 0.5, linetype = 1,
+                                     alpha = NA, prop = 0.5),
+                   
+                   handle_na = function(data, params) {
+                     data
+                   },
+                   
+                   required_aes = c("x", "y"),
+                   
+                   draw_key = draw_key_polygon
+)
+
+
+
+
+# function for plotting
+heat_scree_plot<-function(Loadings, Importance){
+  adjust<-1-Importance[1]
+  pca_adjusted<-Importance[2:length(Importance)]/adjust
+  pca_df<-data.frame(adjusted_variance=pca_adjusted, PC=seq(1:length(pca_adjusted)))
+  
+  scree<-ggplot(pca_df[which(pca_df$PC<13),],aes(PC,adjusted_variance))+geom_bar(stat = "identity",color="black",fill="grey")+theme_bw()+
+    theme(axis.text = element_text(size =12),
+          axis.title = element_text(size =15),
+          plot.margin=unit(c(1,1.5,0.2,2.25),"cm"))+ylab("Adjusted Variance")+
+    scale_x_continuous(breaks = seq(1,20,1))
+  
+  #### Heat
+  ## correlate meta with PCS
+  ## Run anova of each PC on each meta data variable
+  
+  aov_PC_meta<-lapply(1:ncol(meta_categorical), function(covar) sapply(1:ncol(Loadings), function(PC) summary(aov(Loadings[,PC]~meta_categorical[,covar]))[[1]]$"Pr(>F)"[1]))
+  cor_PC_meta<-lapply(1:ncol(meta_continuous), function(covar) sapply(1:ncol(Loadings), function(PC) (cor.test(Loadings[,PC],as.numeric(meta_continuous[,covar]),alternative = "two.sided", method="spearman", na.action=na.omit)$p.value)))
+  names(aov_PC_meta)<-colnames(meta_categorical)
+  names(cor_PC_meta)<-colnames(meta_continuous)
+  aov_PC_meta<-do.call(rbind, aov_PC_meta)
+  cor_PC_meta<-do.call(rbind, cor_PC_meta)
+  aov_PC_meta<-rbind(aov_PC_meta, cor_PC_meta)
+  aov_PC_meta<-as.data.frame(aov_PC_meta)
+  
+  #adjust
+  aov_PC_meta_adjust<-aov_PC_meta[,2:ncol(aov_PC_meta)]
+  
+  #reshape
+  avo<-aov_PC_meta_adjust[,1:12]
+  avo_heat_num<-apply(avo,2, as.numeric)
+  avo_heat<-as.data.frame(avo_heat_num)
+  colnames(avo_heat)<-sapply(1:12, function(x) paste("PC",x, sep=""))
+  avo_heat$meta<-rownames(avo)
+  avo_heat_melt<-melt(avo_heat, id=c("meta"))
+  head(avo_heat_melt)
+  
+  # cluster meta data
+  ord <- c(1:30)
+  meta_var_order<-unique(avo_heat_melt$meta)[rev(ord)]
+  avo_heat_melt$meta <- factor(avo_heat_melt$meta, levels = meta_var_order)
+  
+  # color if sig
+  # avo_heat_melt$Pvalue<-sapply(1:nrow(avo_heat_melt), function(x) if(avo_heat_melt$value[x]>=0.9){">=0.9"}else{
+  # if(avo_heat_melt$value[x]>=0.5){">=0.5"}else{
+  # if(avo_heat_melt$value[x]>=0.1){">=0.1"}else{"<0.1"}}})
+  avo_heat_melt$Pvalue<-sapply(1:nrow(avo_heat_melt), function(x) if(avo_heat_melt$value[x]<=0.001){"<=0.001"}else{
+    if(avo_heat_melt$value[x]<=0.01){"<=0.01"}else{
+      if(avo_heat_melt$value[x]<=0.05){"<=0.05"}else{">0.05"}}})
+  
+  heat<-ggplot(avo_heat_melt, aes(variable,meta, fill = Pvalue)) +
+    geom_tile(color = "black",size=0.5) +
+    theme_gray(8)+scale_fill_manual(values=c("#084594","#4292c6","#9ecae1","#deebf7"))+
+    theme(axis.text = element_text(size =10, color="black"),
+          axis.text.x = element_text(),
+          axis.title = element_text(size =15),
+          legend.text = element_text(size =14),
+          legend.title = element_text(size =12),
+          legend.position = c(1, 0), legend.justification = c(1,0),
+          plot.margin=unit(c(0,2.25,1,1),"cm"))+
+    xlab("Adjusted Principal Component")+ylab(NULL)
+  
+  grid.arrange(scree, heat, ncol=1,  heights = c(2, 4))
+}
+
+
+```
+
+```{r PCA clustering}
+
+all(colnames(betas) == targets$Sample_Name)
+
+pcaParacet = prcomp(na.omit(betas), center = TRUE, scale =FALSE)
+summary(pcaParacet) #Proportion of Variance  PC1: 0.9779, PC2: 0.01119, betas:0.9754 0.01403  
+pcaParacet2 = as.data.frame(pcaParacet$rotation)
+pcaParacet2$Sample_Name = rownames(pcaParacet2)
+pcaParacet2 = merge(pcaParacet2, targets, by = "Sample_Name")
+
+p1 = ggplot(pcaParacet2, aes(PC1, PC2, colour=Group, fill=Group)) + 
+  geom_point(size=1.5) + 
+  geom_bag(prop = 0.95)+
+  scale_color_manual(values = groupcols) +
+  scale_fill_manual(values = groupcols) +
+  ggtitle("Groups")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  xlab("PC1 (97.54%)")+
+  ylab("PC2 (1.4%)") +
+  theme_few()
+
+p2 = ggplot(pcaParacet2, aes(PC1, PC2, colour=Slide, fill=Slide)) + 
+  geom_point(size=1.5) + 
+  geom_bag(prop = 0.95)+
+  scale_color_manual(values = colpal) +
+  scale_fill_manual(values = colpal) +
+  ggtitle("Slide")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  xlab("PC1 (97.54%)")+
+  ylab("PC2 (1.4%)") +
+  theme_few()
+
+p3 = ggplot(pcaParacet2, aes(PC1, PC2, colour=timepoint, fill=timepoint)) + 
+  geom_point(size=1.5) + 
+  geom_bag(prop = 0.95)+
+  scale_color_manual(values = daycols) +
+  scale_fill_manual(values = daycols) +
+  ggtitle("Slide")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  xlab("PC1 (97.54%)")+
+  ylab("PC2 (1.4%)") +
+  theme_few()
+
+p1 + p2 + p3
+dev.copy(pdf,paste0("pca-betas_cluster.pdf"), width = 20, height=6, paper='special')
+dev.off()
+
+p4 = ggplot(pcaParacet2, aes(PC1, PC2, colour=as.factor(timepoint), fill=as.factor(timepoint))) + 
+  geom_point(size=2, aes(shape = Treatment)) + 
+  geom_bag(prop = 0.95)+
+  scale_color_manual(values = daycols) +
+  scale_fill_manual(values = daycols) +
+  ggtitle("Day")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  xlab("PC1 (97.54%)")+
+  ylab("PC2 (1.4%)") +
+  theme_few()
+
+p4
+dev.copy(pdf,paste0("pca-betas_day_treat.pdf"), width = 6.5, height=5, paper='special')
+dev.off()
+
+
+# packages
+library(reshape)
+library(ggplot2)
+library(RColorBrewer)
+library(grid)
+library(gridExtra)
+
+Loadings<-as.data.frame(unclass(pcaParacet$rotation))
+vars <- pcaParacet$sdev^2
+Importance<-vars/sum(vars)
+targets$Experiment = as.factor(targets$Experiment)
+targets$Slide = as.factor(targets$Slide)
+meta_categorical<-targets[,c(7,8, 10,11,14)] # input column numbers in meta that contain categorical variables
+meta_continuous<-subset(targets, select = Concentration.uM) #[,c(9)] # input column numbers in meta that contain continuous variables
+
+heat_scree_plot(Loadings, Importance)
+dev.copy(pdf, paste0("prcomp_Heat-SCREEplot.pdf"), width = 8, paper='special')
+dev.off()
+```
+
+
+# Differential methylation analysis
+
+```{r Differential methylation}
+
+#-------------------------------------------------------------------------------------------------------------------
+## Analysis based on group design approach according to limma vignette
+#-------------------------------------------------------------------------------------------------------------------
+
+## Probewise differential methylation analyses using limma
+
+# Research questions:
+# 1. which CpGs respond to paracetamol treatment day 7? --> day7.P100 vs day7.control & day7.P200 vs day7.control & day7.P200 vs day7.P100
+# 2. which CpGs respond to paracetamol treatment day 20? --> day20.P100 vs day20.control & day20.P200 vs day20.control & day20.P200 vs day20.P100
+# 3. The third relates to the difference of differences, i.e.
+# which CpGs respond differently over time between different paracetamol concentrations and control 
+#--> (day20.P200 vs day7.P200) - (day20.ctrl vs day7.control)
+#--> (day20.P100 vs day7.P100) - (day20.ctrl vs day7.control)
+
+#Subset Day 7 and day 20 samples from target
+# make sure that variables/factors of interest are factors
+rownames(targets) = targets$Sample_Name
+targets_D7D20 = targets %>% dplyr::filter(timepoint %in% c("7","20"))
+targets_D7D20$timepoint = factor(targets_D7D20$timepoint) 
+levels(targets_D7D20$Group) 
+targets_D7D20$Group = factor(targets_D7D20$Group) #Remove D0 and D13 from levels
+levels(targets_D7D20$Group)
+targets_D7D20$Group = factor(targets_D7D20$Group, levels = c("Control_day_7","100_uM_paracetamol_day_7","200_uM_paracetamol_day_7", "Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20")) #Endre rekkefølgen til riktig dag
+levels(targets_D7D20$timepoint)
+levels(targets_D7D20$Treatment)
+targets_D7D20$Concentration.uM = factor(targets_D7D20$Concentration.uM)
+levels(targets_D7D20$Concentration.uM)
+targets_D7D20$Slide = factor(targets_D7D20$Slide)
+
+keep = targets_D7D20$Sample_Name
+mValsD7D20 = mVals[,keep]
+betas.D7D20 = betas[,keep]
+
+all(colnames(mValsD7D20) == targets_D7D20$Sample_Name) #True
+
+#<design matrix
+design = model.matrix(~0+Group, data=targets_D7D20) # without covariates in the model
+is.fullrank(design) #TRUE
+
+
+#Then this inter-subject correlation is input into the linear model fit:
+fit = lmFit(mValsD7D20,design)
+
+#PER TIDSPUNKT: GRUPPETEST
+#Make comparisons between the experimental conditions to answer research questions above:
+cont.matrix  = makeContrasts(
+  d7_P200vsCtrl_Diff = (Group200_uM_paracetamol_day_7 - GroupControl_day_7),
+  d7_P100vsCtrl_Diff = (Group100_uM_paracetamol_day_7 - GroupControl_day_7),
+  d7_P200vsd7_P100_Diff = (Group200_uM_paracetamol_day_7 - Group100_uM_paracetamol_day_7),
+  d20_P200vsCtrl_Diff = (Group200_uM_paracetamol_day_20 - GroupControl_day_20),
+  d20_P100vsCtrl_Diff = (Group100_uM_paracetamol_day_20 - GroupControl_day_20),
+  d20_P200vsd20_P100_Diff = (Group200_uM_paracetamol_day_20 - Group100_uM_paracetamol_day_20),
+  ctrlD20_D7_Diff = (GroupControl_day_20 - GroupControl_day_7), 
+  P100D20_D7_Diff = (Group100_uM_paracetamol_day_20 - Group100_uM_paracetamol_day_7), 
+  P200D20_D7_Diff = (Group200_uM_paracetamol_day_20 - Group200_uM_paracetamol_day_7),
+  TRp100_Diff = (Group100_uM_paracetamol_day_20 - Group100_uM_paracetamol_day_7) -(GroupControl_day_20 - GroupControl_day_7),
+  TRp200_Diff = (Group200_uM_paracetamol_day_20 - Group200_uM_paracetamol_day_7) -(GroupControl_day_20 - GroupControl_day_7),
+  levels = design)
+
+
+#Compute these contrasts and moderated t-tests:
+fit2 = contrasts.fit(fit, cont.matrix)
+fit2 = eBayes(fit2)
+
+# get summary of tests
+results = decideTests(fit2, method="separate", p.value = 0.05, adjust.method = "BH")
+summary(results)
+
+vennDiagram(results[,1:3], cex = c(0.9,1,1), include=c("up", "down"), circle.col = c("steelblue4", "lightgoldenrod", "palevioletred"))
+vennDiagram(results[,4:6], cex = c(0.9,1,1), include=c("up", "down"), circle.col = c("steelblue4", "lightgoldenrod", "palevioletred"))
+vennDiagram(results[,7:9], cex = c(0.9,1,1), include=c("up", "down"), circle.col = c("steelblue4", "lightgoldenrod", "palevioletred"))
+vennDiagram(results[,10:11], cex = c(0.9,1,1), include=c("up", "down"), circle.col = c("steelblue4", "lightgoldenrod", "palevioletred"))
+```
+
+
+## Find significant CpG-sites
+
+```{r Find significant CpG-sites}
+
+# differences on day 7: P100 - ctrl
+t_d7_p100_ctrl = topTable(fit2, coef="d7_P100vsCtrl_Diff", n=Inf, genelist= annoEPICsub, sort.by="p") 
+sum(t_d7_p100_ctrl$adj.P.Val < 0.05)
+sig_d7_p100_ctrl = t_d7_p100_ctrl[which(t_d7_p100_ctrl$adj.P.Val < 0.05),] 
+#head(sig_d7_p100_ctrl)
+write.table(sig_d7_p100_ctrl, file="sig_d7_p100_ctrl.csv", sep=",", row.names=FALSE)
+
+# differences on day 7: P200 - ctrl
+t_d7_p200_ctrl = topTable(fit2, coef="d7_P200vsCtrl_Diff", n=Inf, genelist= annoEPICsub, sort.by="p")
+sum(t_d7_p200_ctrl$adj.P.Val < 0.05)
+sig_d7_p200_ctrl = t_d7_p200_ctrl[which(t_d7_p200_ctrl$adj.P.Val < 0.05),] 
+#head(sig_d7_p200_ctrl)
+write.table(sig_d7_p200_ctrl, file="sig_d7_p200_ctrl.csv", sep=",", row.names=FALSE)
+
+# differences on day 7: P200 - P100
+t_d7_p200_p100 = topTable(fit2, coef="d7_P200vsd7_P100_Diff", n=Inf, genelist= annoEPICsub, sort.by="p") 
+sum(t_d7_p200_p100$adj.P.Val < 0.05)
+sig_d7_p200_p100 = t_d7_p200_p100[which(t_d7_p200_p100$adj.P.Val < 0.05),] 
+#head(sig_d7_p200_p100)
+write.table(sig_d7_p200_p100, file="sig_d7_p200_p100.csv", sep=",", row.names=FALSE)
+
+#--------------------------------------------------------------------------------------------------------
+
+# differences on day 20: P100 - ctrl
+t_d20_p100_ctrl = topTable(fit2, coef="d20_P100vsCtrl_Diff", n=Inf, genelist= annoEPICsub, sort.by="p") 
+sum(t_d20_p100_ctrl$adj.P.Val < 0.05)
+sig_d20_p100_ctrl = t_d20_p100_ctrl[which(t_d20_p100_ctrl$adj.P.Val < 0.05),] 
+#head(sig_d20_p100_ctrl)
+write.table(sig_d20_p100_ctrl, file="sig_d20_p100_ctrl.csv", sep=",", row.names=FALSE)
+
+# differences on day 20: P200 - ctrl
+t_d20_p200_ctrl = topTable(fit2, coef="d20_P200vsCtrl_Diff", n=Inf, genelist= annoEPICsub, sort.by="p")
+sum(t_d20_p200_ctrl$adj.P.Val < 0.05)
+sig_d20_p200_ctrl = t_d20_p200_ctrl[which(t_d20_p200_ctrl$adj.P.Val < 0.05),] 
+#head(sig_d20_p200_ctrl)
+write.table(sig_d20_p200_ctrl, file="sig_d20_p200_ctrl.csv", sep=",", row.names=FALSE)
+
+# differences on day 20: P200 - P100
+t_d20_p200_p100 = topTable(fit2, coef="d20_P200vsd20_P100_Diff", n=Inf, genelist= annoEPICsub, sort.by="p") 
+sum(t_d20_p200_p100$adj.P.Val < 0.05)
+sig_d20_p200_p100 = t_d20_p200_p100[which(t_d20_p200_p100$adj.P.Val < 0.05),] 
+#head(sig_d20_p200_p100)
+write.table(sig_d20_p200_p100, file="sig_d20_p200_p100.csv", sep=",", row.names=FALSE)
+
+#--------------------------------------------------------------------------------------------------------
+#Response over time
+#Control samples
+t_ctrl_D20_D7 = topTable(fit2, coef="ctrlD20_D7_Diff", n=Inf, genelist= annoEPICsub, sort.by="p") 
+sum(t_ctrl_D20_D7$adj.P.Val < 0.05)
+sig_ctrl_D20_D7 = t_ctrl_D20_D7[which(t_ctrl_D20_D7$adj.P.Val < 0.05),] 
+#head(sig_ctrl_D20_D7)
+write.table(sig_ctrl_D20_D7, file="sig_ctrl_D20_D7.csv", sep=",", row.names=FALSE)
+
+#P100
+t_p100_D20_D7 = topTable(fit2, coef="P100D20_D7_Diff", n=Inf, genelist= annoEPICsub, sort.by="p") 
+sum(t_p100_D20_D7$adj.P.Val < 0.05)
+sig_p100_D20_D7 = t_p100_D20_D7[which(t_p100_D20_D7$adj.P.Val < 0.05),] 
+#head(sig_p100_D20_D7)
+write.table(sig_p100_D20_D7, file="sig_p100_D20_D7.csv", sep=",", row.names=FALSE)
+
+#P200
+t_p200_D20_D7 = topTable(fit2, coef="P200D20_D7_Diff", n=Inf, genelist= annoEPICsub, sort.by="p")
+sum(t_p200_D20_D7$adj.P.Val < 0.05)
+sig_p200_D20_D7 = t_p200_D20_D7[which(t_p200_D20_D7$adj.P.Val < 0.05),] 
+#head(sig_p200_D20_D7)
+write.table(sig_p200_D20_D7, file="sig_p200_D20_D7.csv", sep=",", row.names=FALSE)
+
+#------------------------------------
+#Differentiating cells´response to paracetamol over time
+#Difference in differences
+
+#Difference P100: p100(Day 20 - Day 7) - ctrl(Day 20 - Day 7) 
+t_TR_p100 = topTable(fit2, coef="TRp100_Diff", n=Inf, genelist= annoEPICsub, sort.by="p") 
+sum(t_TR_p100$adj.P.Val < 0.05)
+sig_TR_p100 = t_TR_p100[which(t_TR_p100$adj.P.Val < 0.05),] 
+#head(sig_TR_p100)
+write.table(sig_TR_p100, file="sig_TR_p100.csv", sep=",", row.names=FALSE)
+
+#Difference P200: p200(Day 20 - Day 7) - ctrl(Day 20 - Day 7) 
+t_TR_p200 = topTable(fit2, coef="TRp200_Diff", n=Inf, genelist= annoEPICsub, sort.by="p") 
+sum(t_TR_p200$adj.P.Val < 0.05)
+sig_TR_p200 = t_TR_p200[which(t_TR_p200$adj.P.Val < 0.05),] 
+#head(sig_TR_p200)
+write.table(sig_TR_p200, file="sig_TR_p200.csv", sep=",", row.names=FALSE)
+
+save(sig_d7_p100_ctrl, sig_d7_p200_ctrl, sig_d20_p100_ctrl, sig_d20_p200_ctrl, sig_d20_p200_p100, sig_TR_p200, file = "DMdata_paracet.RData" )
+```
+
+```{r qq-plot}
+library(GenABEL)
+#Day 7 p100 vs ctrl
+pval_d7_p100_ctrl= data.frame(
+  observed = -log10(sort(t_d7_p100_ctrl$P.Value)),
+  expected = -log10(1:length(t_d7_p100_ctrl$P.Value) / length(t_d7_p100_ctrl$P.Value)))
+
+lambda = estlambda(t_d7_p100_ctrl$P.Value)
+lambda = lambda$estimate
+
+ggplot(pval_d7_p100_ctrl, aes(expected, observed))+
+	geom_point(shape=21, size=1, color="black")+
+  	geom_abline(intercept=0, aes(lwd=1)) + annotate("text", x = 0.5, y=7.5, label = paste0("Lambda = ", sprintf("%0.2f", round(lambda, digits = 2)))) +labs(title = "Day 7 P100 vs ctrl") + theme_classic()
+dev.copy(pdf,paste0("qq-plot_d7_p100_ctrl.pdf"), height = 5, width = 5.5)
+dev.off()
+
+ggplot(t_d7_p100_ctrl, aes(P.Value))+
+  geom_histogram(binwidth = 0.01) + theme_classic()
+dev.copy(pdf,paste0("Histo_pvals_d7_p100_ctrl.pdf"), height = 4, width = 5.5)
+dev.off()
+
+ggplot(t_d7_p100_ctrl, aes(t))+
+  geom_histogram(binwidth = 0.1) + theme_classic()
+dev.copy(pdf,paste0("teststatistic_Histo_d7_p100_ctrl_+Slide.pdf"), height = 4, width = 5.5)
+dev.off()
+
+
+#Day 7 p200 vs ctrl
+pval_d7_p200_ctrl= data.frame(
+  observed = -log10(sort(t_d7_p200_ctrl$P.Value)),
+  expected = -log10(1:length(t_d7_p200_ctrl$P.Value) / length(t_d7_p200_ctrl$P.Value)))
+
+lambda = estlambda(t_d7_p200_ctrl$P.Value)
+lambda = lambda$estimate
+
+ggplot(pval_d7_p200_ctrl, aes(expected, observed))+
+	geom_point(shape=21, size=1, color="black")+
+  	geom_abline(intercept=0, aes(lwd=1)) + annotate("text", x = 0.5, y=9.5, label = paste0("Lambda = ", sprintf("%0.2f", round(lambda, digits = 2))))+labs(title = "Day 7 P200 vs ctrl") +theme_classic()
+dev.copy(pdf,paste0("qq-plot_d7_p200_ctrl.pdf"), height = 5, width = 5.5)
+dev.off()
+
+ggplot(t_d7_p200_ctrl, aes(P.Value))+
+  geom_histogram(binwidth = 0.01) + theme_classic()
+dev.copy(pdf,paste0("Histo_pvals_d7_p200_ctrl.pdf"), height = 4, width = 5.5)
+dev.off()
+
+ggplot(t_d7_p200_ctrl, aes(t))+
+  geom_histogram(binwidth = 0.1) + theme_classic()
+dev.copy(pdf,paste0("teststatistic_Histo_d7_p200_ctrl_+Slide.pdf"), height = 4, width = 5.5)
+dev.off()
+
+#Day 7 p200 vs p100
+pval_d7_p200_p100= data.frame(
+  observed = -log10(sort(t_d7_p200_p100$P.Value)),
+  expected = -log10(1:length(t_d7_p200_p100$P.Value) / length(t_d7_p200_p100$P.Value)))
+
+lambda = estlambda(t_d7_p200_p100$P.Value)
+lambda = lambda$estimate
+
+ggplot(pval_d7_p200_p100, aes(expected, observed))+
+	geom_point(shape=21, size=1, color="black")+
+  	geom_abline(intercept=0, aes(lwd=1)) + annotate("text", x = 0.5, y=7, label = paste0("Lambda = ", sprintf("%0.2f", round(lambda, digits = 2))))+labs(title = "Day 7 P200 vs P100") +theme_classic()
+dev.copy(pdf,paste0("qq-plot_d7_p200_p100.pdf"), height = 5, width = 5.5)
+dev.off()
+
+ggplot(t_d7_p200_p100, aes(P.Value))+
+  geom_histogram(binwidth = 0.01) + theme_classic()
+dev.copy(pdf,paste0("Histo_pvals_d7_p200_p100.pdf"), height = 4, width = 5.5)
+dev.off()
+
+ggplot(t_d7_p200_p100, aes(t))+
+  geom_histogram(binwidth = 0.1) + theme_classic()
+dev.copy(pdf,paste0("teststatistic_Histo_d7_p200_p100_+Slide.pdf"), height = 4, width = 5.5)
+dev.off()
+
+#Day 20 p100 vs ctrl
+pval_d20_p100_ctrl= data.frame(
+  observed = -log10(sort(t_d20_p100_ctrl$P.Value)),
+  expected = -log10(1:length(t_d20_p100_ctrl$P.Value) / length(t_d20_p100_ctrl$P.Value)))
+
+lambda = estlambda(t_d20_p100_ctrl$P.Value)
+lambda = lambda$estimate
+
+ggplot(pval_d20_p100_ctrl, aes(expected, observed))+
+	geom_point(shape=21, size=1, color="black")+
+  	geom_abline(intercept=0, aes(lwd=1)) + annotate("text", x = 0.5, y=11.5, label = paste0("Lambda = ", sprintf("%0.2f", round(lambda, digits = 2)))) +labs(title = "Day 20 P100 vs ctrl") + theme_classic()
+dev.copy(pdf,paste0("qq-plot_d20_p100_ctrl.pdf"), height = 5, width = 5.5)
+dev.off()
+
+ggplot(t_d20_p100_ctrl, aes(P.Value))+
+  geom_histogram(binwidth = 0.01) + theme_classic()
+dev.copy(pdf,paste0("Histo_pvals_d20_p100_ctrl.pdf"), height = 4, width = 5.5)
+dev.off()
+
+ggplot(t_d20_p100_ctrl, aes(t))+
+  geom_histogram(binwidth = 0.1) + theme_classic()
+dev.copy(pdf,paste0("teststatistic_Histo_d20_p100_ctrl_+Slide.pdf"), height = 4, width = 5.5)
+dev.off()
+
+#Day 20 p200 vs ctrl
+pval_d20_p200_ctrl= data.frame(
+  observed = -log10(sort(t_d20_p200_ctrl$P.Value)),
+  expected = -log10(1:length(t_d20_p200_ctrl$P.Value) / length(t_d20_p200_ctrl$P.Value)))
+
+lambda = estlambda(t_d20_p200_ctrl$P.Value)
+lambda = lambda$estimate
+
+ggplot(pval_d20_p200_ctrl, aes(expected, observed))+
+	geom_point(shape=21, size=1, color="black")+
+  	geom_abline(intercept=0, aes(lwd=1)) + annotate("text", x = 0.5, y=15, label = paste0("Lambda = ", sprintf("%0.2f", round(lambda, digits = 2))))+labs(title = "Day 20 P200 vs ctrl") +theme_classic()
+dev.copy(pdf,paste0("qq-plot_d20_p200_ctrl.pdf"), height = 5, width = 5.5)
+dev.off()
+
+ggplot(t_d20_p200_ctrl, aes(P.Value))+
+  geom_histogram(binwidth = 0.01) + theme_classic()
+dev.copy(pdf,paste0("Histo_pvals_d20_p200_ctrl.pdf"), height = 4, width = 5.5)
+dev.off()
+
+ggplot(t_d20_p200_ctrl, aes(t))+
+  geom_histogram(binwidth = 0.1) + theme_classic()
+dev.copy(pdf,paste0("teststatistic_Histo_d20_p200_ctrl_+Slide.pdf"), height = 4, width = 5.5)
+dev.off()
+
+#Day 20 p200 vs p100
+pval_d20_p200_p100= data.frame(
+  observed = -log10(sort(t_d20_p200_p100$P.Value)),
+  expected = -log10(1:length(t_d20_p200_p100$P.Value) / length(t_d20_p200_p100$P.Value)))
+
+lambda = estlambda(t_d20_p200_p100$P.Value)
+lambda = lambda$estimate
+
+ggplot(pval_d20_p200_p100, aes(expected, observed))+
+	geom_point(shape=21, size=1, color="black")+
+  	geom_abline(intercept=0, aes(lwd=1)) + annotate("text", x = 0.5, y=15, label = paste0("Lambda = ", sprintf("%0.2f", round(lambda, digits = 2))))+labs(title = "Day 20 P200 vs P100") +theme_classic()
+dev.copy(pdf,paste0("qq-plot_d20_p200_p100.pdf"), height = 5, width = 5.5)
+dev.off()
+
+ggplot(t_d20_p200_p100, aes(P.Value))+
+  geom_histogram(binwidth = 0.01) + theme_classic()
+dev.copy(pdf,paste0("Histo_pvals_d20_p200_p100.pdf"), height = 4, width = 5.5)
+dev.off()
+
+ggplot(t_d20_p200_p100, aes(t))+
+  geom_histogram(binwidth = 0.1) + theme_classic()
+dev.copy(pdf,paste0("teststatistic_Histo_d20_p200_p100_+Slide.pdf"), height = 4, width = 5.5)
+dev.off()
+
+#TR P100
+pval_TR_p100= data.frame(
+  observed = -log10(sort(t_TR_p100$P.Value)),
+  expected = -log10(1:length(t_TR_p100$P.Value) / length(t_TR_p100$P.Value)))
+
+lambda = estlambda(t_TR_p100$P.Value)
+lambda = lambda$estimate
+
+ggplot(pval_TR_p100, aes(expected, observed))+
+	geom_point(shape=21, size=1, color="black")+
+  	geom_abline(intercept=0, aes(lwd=1)) + annotate("text", x = 0.5, y=7, label = paste0("Lambda = ", sprintf("%0.2f", round(lambda, digits = 2))))+labs(title = "TR_p100") +theme_classic()
+dev.copy(pdf,paste0("qq-plot_TR_p100.pdf"), height = 5, width = 5.5)
+dev.off()
+
+ggplot(t_TR_p100, aes(P.Value))+
+  geom_histogram(binwidth = 0.01) + theme_classic()
+dev.copy(pdf,paste0("Histo_pvals_TR_p100.pdf"), height = 4, width = 5.5)
+dev.off()
+
+ggplot(t_TR_p100, aes(t))+
+  geom_histogram(binwidth = 0.1) + theme_classic()
+dev.copy(pdf,paste0("teststatistic_Histo_TR_p100_+Slide.pdf"), height = 4, width = 5.5)
+dev.off()
+
+#TR_p200
+pval_TR_p200= data.frame(
+  observed = -log10(sort(t_TR_p200$P.Value)),
+  expected = -log10(1:length(t_TR_p200$P.Value) / length(t_TR_p200$P.Value)))
+
+lambda = estlambda(t_TR_p200$P.Value)
+lambda = lambda$estimate
+
+ggplot(pval_TR_p200, aes(expected, observed))+
+	geom_point(shape=21, size=1, color="black")+
+  	geom_abline(intercept=0, aes(lwd=1)) + annotate("text", x = 0.5, y=10, label = paste0("Lambda = ", sprintf("%0.2f", round(lambda, digits = 2))))+labs(title = "TR_p200") +theme_classic()
+dev.copy(pdf,paste0("qq-plot_TR_p200.pdf"), height = 5, width = 5.5)
+dev.off()
+
+ggplot(t_TR_p200, aes(P.Value))+
+  geom_histogram(binwidth = 0.01) + theme_classic()
+dev.copy(pdf,paste0("Histo_pvals_TR_p200.pdf"), height = 4, width = 5.5)
+dev.off()
+
+ggplot(t_TR_p200, aes(t))+
+  geom_histogram(binwidth = 0.1) + theme_classic()
+dev.copy(pdf,paste0("teststatistic_Histo_TR_p200+Slide.pdf"), height = 4, width = 5.5)
+dev.off()
+
+
+## All qq-plots in one
+pvals= data.frame(
+  D7_P100_ctrl = -log10(sort(t_d7_p100_ctrl$P.Value)),
+  D7_P200_ctrl = -log10(sort(t_d7_p200_ctrl$P.Value)),
+  D7_P200_P100 = -log10(sort(t_d7_p200_p100$P.Value)),
+  D20_P100_ctrl = -log10(sort(t_d20_p100_ctrl$P.Value)),
+  D20_P200_ctrl = -log10(sort(t_d20_p200_ctrl$P.Value)),
+  D20_P200_P100 = -log10(sort(t_d20_p200_p100$P.Value)),
+  TR_P100 = -log10(sort(t_TR_p100$P.Value)),
+  TR_P200 = -log10(sort(t_TR_p200$P.Value)),
+  expected = -log10(1:length(t_d7_p100_ctrl$P.Value) / length(t_d7_p100_ctrl$P.Value)))
+
+pvals = pvals %>% tidyr::pivot_longer(names_to = "Comparison", values_to = "observed", cols = -expected)
+
+ggplot(pvals)+
+	geom_point(aes(expected, observed, fill = Comparison, color = Comparison), shape=21, size=1)+
+  	geom_abline(intercept=0, aes(lwd=1)) +labs(title = "qq-plot") + scale_fill_viridis(option="magma", discrete=TRUE) +scale_color_viridis(option="magma", discrete=TRUE)+ theme_classic()
+dev.copy(pdf,paste0("qq-plots.pdf"), height = 7, width = 7.5)
+dev.off()
+
+
+```
+
+## Calculate average betas
+
+```{r Calculate average betas }
+
+betas_df = as.data.frame(betas) #gjør om matrix til data frame
+avg.betas = betas_df %>% dplyr::mutate(d7ctrl = rowMeans(betas_df[, dplyr::filter(targets, Group == "Control_day_7")$Sample_Name], na.rm = TRUE), 
+                                d7_p100 = rowMeans(betas_df[, dplyr::filter(targets, Group == "100_uM_paracetamol_day_7")$Sample_Name], na.rm = TRUE), 
+                                d7_p200 = rowMeans(betas_df[, dplyr::filter(targets, Group == "200_uM_paracetamol_day_7")$Sample_Name], na.rm = TRUE),
+                                d20_ctrl = rowMeans(betas_df[, dplyr::filter(targets, Group == "Control_day_20")$Sample_Name], na.rm = TRUE),
+                                d20_p100 = rowMeans(betas_df[, dplyr::filter(targets, Group == "100_uM_paracetamol_day_20")$Sample_Name], na.rm = TRUE),
+                                d20_p200 = rowMeans(betas_df[, dplyr::filter(targets, Group == "200_uM_paracetamol_day_20")$Sample_Name], na.rm = TRUE))
+
+avg.betas = avg.betas[,44:49]
+
+```
+
+# Visualize results
+```{r Distribution density plot, bins}
+annoEPICsub2 = subset(annoEPICsub, select = c("Type"))
+targets2 = subset(targets, select = c(Sample_Name, timepoint, Group))
+
+betas_df2 = cbind(betas_df, annoEPICsub2)
+betas_df_long = betas_df2 %>%  pivot_longer(cols = !"Type", names_to = "Sample_Name", values_to = "beta")
+betas_df_long2 = merge(betas_df_long, targets2, by = "Sample_Name")
+levels(betas_df_long2$timepoint)
+levels(betas_df_long2$Group)
+betas_df_long2$Group = factor(betas_df_long2$Group, levels = c("Control_day_0","Control_day_7","100_uM_paracetamol_day_7" , "200_uM_paracetamol_day_7","Control_day_13",  "Control_day_20", "100_uM_paracetamol_day_20","200_uM_paracetamol_day_20"))
+
+ggplot(betas_df_long2, aes(x = beta, col = timepoint)) +
+  geom_density() + 
+  scale_color_manual(values = daycols) +
+  facet_wrap(~ Type)+
+  theme_minimal()+theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("densityDistributionBetasByProbe.pdf"),height = 5, width = 7, paper='special')
+dev.off()
+
+ggplot(betas_df_long2, aes(x = beta, col = timepoint)) +
+  geom_density() + 
+  scale_color_manual(values = daycols) +
+  theme_minimal()+theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("densityDistributionBetas.pdf"),height = 5, width = 7, paper='special')
+dev.off()
+
+#cairo_pdf("Box_bins_all-CpGs.pdf", height = 5, width = 7, fallback_resolution = 300)
+betas_df_long2 %>% mutate(bin = cut_width(beta, width = 0.25, boundary = 0)) %>% 
+ggplot(.) +
+  geom_boxplot(aes(fill = timepoint, x = bin, y = beta))+
+  scale_fill_manual(values = daycols) +
+theme_few()+theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(cairo_pdf,paste0("Box_bins_all-CpGs.pdf"),height = 5, fallback_resolution = 200)
+dev.off()
+
+#cairo_pdf("Box_bins_Groups_all-CpGs.pdf", height = 5, width = 8, fallback_resolution = 200)
+betas_df_long2 %>% mutate(bin = cut_width(beta, width = 0.25, boundary = 0)) %>% 
+ggplot(.) +
+  geom_boxplot(aes(fill = Group, x = bin, y = beta))+
+  scale_fill_manual(values = groupcols) +
+theme_few()+theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(cairo_pdf,paste0("Box_bins_groups_all-CpGs.pdf"),height = 5,width = 7, fallback_resolution = 200)
+dev.off()
+
+#non-CpG distribution
+betas_df3 = betas_df 
+betas_df3$cgid = rownames(betas_df3)
+betas_df3 = betas_df3 %>% dplyr::filter(cgid %in% nonCpG$cgid)
+
+betas_df_long2 = betas_df3 %>%  pivot_longer(cols = !"cgid", names_to = "Sample_Name", values_to = "beta")
+betas_df_long2 = merge(betas_df_long2, targets2, by = "Sample_Name")
+levels(betas_df_long2$timepoint)
+levels(betas_df_long2$Group)
+betas_df_long2$Group = factor(betas_df_long2$Group, levels = c("Control_day_0","Control_day_7","100_uM_paracetamol_day_7" , "200_uM_paracetamol_day_7","Control_day_13",  "Control_day_20", "100_uM_paracetamol_day_20","200_uM_paracetamol_day_20"))
+
+
+betas_df_long2 %>% mutate(bin = cut_width(beta, width = 0.25, boundary = 0)) %>% 
+ggplot(.) +
+  geom_boxplot(aes(fill = timepoint, x = bin, y = beta))+
+  scale_fill_manual(values = daycols) +
+  ylim(0,1) +
+theme_few() +theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(cairo_pdf,paste0("Box_bins_NON-CpGs.pdf"),height = 5, fallback_resolution = 300)
+dev.off()
+
+betas_df_long2 %>% mutate(bin = cut_width(beta, width = 0.25, boundary = 0)) %>% 
+ggplot(.) +
+  geom_boxplot(aes(fill = Group, x = bin, y = beta))+
+  scale_fill_manual(values = groupcols) +
+  ylim(0,1) +
+theme_few() +theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(cairo_pdf,paste0("Box_bins_groups_NON-CpGs.pdf"),height = 5, width = 7, fallback_resolution = 300)
+dev.off()
+```
+
+## Annotated DM CpGs
+```{r}
+#Find unique gene annotation for cpgs
+all.genes = annoEPICsub[c("cgid", "UCSC_RefGene_Name")] # subset annotated beta matrix 
+s = strsplit(all.genes$UCSC_RefGene_Name, split = ";")
+
+uniqueGenes = data.frame(cgid = rep(all.genes$cgid, sapply(s, length)), external_gene_name = unlist(s))
+uniqueGenes = uniqueGenes[!duplicated(uniqueGenes[c(names(uniqueGenes))]),] 
+
+#Unique relation to genes
+all.refGeneGroup = annoEPIC[c("cgid", "UCSC_RefGene_Group")] # subset annotated beta matrix 
+s = strsplit(all.refGeneGroup$UCSC_RefGene_Group, split = ";")
+
+uniqueRelToGenes = data.frame(cgid = rep(all.refGeneGroup$cgid, sapply(s, length)), Relation_to_gene = unlist(s))
+uniqueRelToGenes = uniqueRelToGenes[!duplicated(uniqueRelToGenes[c(names(uniqueRelToGenes))]),]
+
+## define a helper function
+empty_as_na <- function(x){
+    if("factor" %in% class(x)) x <- as.character(x) ## since ifelse wont work with factors
+    ifelse(as.character(x)!="", x, NA)
+}
+
+```
+
+
+
+```{r Overlap with MoBa}
+###Overlap with sig CpGs Paracet + ADHD vs control
+
+Day20DMCs = c(rownames(sig_d20_p100_ctrl), rownames(sig_d20_p200_ctrl),rownames(sig_d20_p200_p100)) #85797 CpGs
+
+moba = read.csv("MoBA_expADHDvscontrol.csv", header = T) #6211 CpGs
+moba = moba$cgid
+
+D20_moba_ol = intersect(Day20DMCs, moba) #205 CpGs
+
+#Boxplot
+sig_betas = subset(betas_df, subset = rownames(betas_df) %in% D20_moba_ol) 
+sig_betas$cgid = rownames(sig_betas)
+# Subset beta values for all samples per cpg for uniquely annotated CpGs
+
+sig_betas2 = merge(sig_betas, t_ctrl_D20_D7, by = "cgid") #combine dfs so position and betas are in same df
+sig_betas2 <- sig_betas2 %>% pivot_longer(-c(cgid, chr, pos, strand, Name, Type, Probe_rs, Probe_maf, CpG_rs, CpG_maf, SBE_rs, SBE_maf, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, Phantom5_Enhancers, Regulatory_Feature_Group, GencodeCompV12_Group, Start_hg38, End_hg38, Strand_hg38,logFC, AveExpr, t, P.Value, adj.P.Val,B), names_to = "Sample_Name", values_to = "beta") %>% remove_rownames(.) #Make long dataframe for plotting
+sig_betas2 = merge(sig_betas2, targets, by = "Sample_Name")
+sig_betas2$Group = factor(sig_betas2$Group, levels = c("Control_day_0",             "Control_day_7",  "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7",  "Control_day_13" ,"Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+sig_betas2 %>% ggplot(., aes(timepoint, beta), group = Concentration.uM) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=groupcols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", alpha = 0.5, size = 0.7) +
+  labs(x = "", y = "Beta value") +
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ cgid + UCSC_RefGene_Name) +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0("Boxplot_Paracet_MoBaoverlap_betas.pdf"), width = 30, height=32, paper='special')
+dev.off()
+
+
+moBa_genes_overlap =subset(uniqueGenes, subset = uniqueGenes$cgid %in% D20_moba_ol)
+write.csv(moBa_genes_overlap, "CpG_overlap_MoBa.csv")
+
+#CpGs significant from MoBa, overlapping with both DMCs and DEGs from Day 20 cells
+Gene_CpGoverlap_MoBa = read.csv("Gene_CpGoverlap_MoBa.csv")
+
+CpGs = subset(moBa_genes_overlap, subset = moBa_genes_overlap$external_gene_name %in% Gene_CpGoverlap_MoBa$Gene_CpGoverlap)
+
+sig_betas = subset(betas_df, subset = rownames(betas_df) %in% CpGs$cgid) 
+sig_betas$cgid = rownames(sig_betas)
+# Subset beta values for all samples per cpg for uniquely annotated CpGs
+
+sig_betas2 = merge(sig_betas, t_ctrl_D20_D7, by = "cgid") #combine dfs so position and betas are in same df
+sig_betas2 <- sig_betas2 %>% pivot_longer(-c(cgid, chr, pos, strand, Name, Type, Probe_rs, Probe_maf, CpG_rs, CpG_maf, SBE_rs, SBE_maf, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, Phantom5_Enhancers, Regulatory_Feature_Group, GencodeCompV12_Group, Start_hg38, End_hg38, Strand_hg38,logFC, AveExpr, t, P.Value, adj.P.Val,B), names_to = "Sample_Name", values_to = "beta") %>% remove_rownames(.) #Make long dataframe for plotting
+sig_betas2 = merge(sig_betas2, targets, by = "Sample_Name")
+sig_betas2$Group = factor(sig_betas2$Group, levels = c("Control_day_0",             "Control_day_7",  "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7",  "Control_day_13" ,"Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+sig_betas2 %>% ggplot(., aes(timepoint, beta), group = Concentration.uM) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=groupcols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", alpha = 0.5, size = 0.7) +
+  labs(x = "", y = "Beta value") +
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ cgid + UCSC_RefGene_Name) +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0("Boxplot_Paracet_MoBaoverlapCpGs_and_genes_betas.pdf"), width = 9, height=11, paper='special')
+dev.off()
+
+##MoBA ADHD ctrl
+
+MoBa_ADHD = read.csv("MoBa_expADHDvsADHDctrl.csv", header = T) #193 CpGs
+MoBa_ADHD = MoBa_ADHD$cgid
+
+D20_mobaADHD_ol = intersect(Day20DMCs, MoBa_ADHD) #8 CpGs
+
+#Boxplot
+sig_betas = subset(betas_df, subset = rownames(betas_df) %in% D20_mobaADHD_ol) 
+sig_betas$cgid = rownames(sig_betas)
+# Subset beta values for all samples per cpg for uniquely annotated CpGs
+
+sig_betas2 = merge(sig_betas, t_ctrl_D20_D7, by = "cgid") #combine dfs so position and betas are in same df
+sig_betas2 <- sig_betas2 %>% pivot_longer(-c(cgid, chr, pos, strand, Name, Type, Probe_rs, Probe_maf, CpG_rs, CpG_maf, SBE_rs, SBE_maf, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, Phantom5_Enhancers, Regulatory_Feature_Group, GencodeCompV12_Group, Start_hg38, End_hg38, Strand_hg38,logFC, AveExpr, t, P.Value, adj.P.Val,B), names_to = "Sample_Name", values_to = "beta") %>% remove_rownames(.) #Make long dataframe for plotting
+sig_betas2 = merge(sig_betas2, targets, by = "Sample_Name")
+sig_betas2$Group = factor(sig_betas2$Group, levels = c("Control_day_0",             "Control_day_7",  "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7",  "Control_day_13" ,"Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+sig_betas2 %>% ggplot(., aes(timepoint, beta), group = Concentration.uM) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=groupcols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", alpha = 0.5, size = 0.7) +
+  labs(x = "", y = "Beta value") +
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ cgid + UCSC_RefGene_Name) +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0("Boxplot_Paracet_MoBaADHDoverlap_betas.pdf"), width = 5, height=7, paper='special')
+dev.off()
+
+
+moBaADHD_genes_overlap =subset(uniqueGenes, subset = uniqueGenes$cgid %in% D20_mobaADHD_ol)
+write.csv(moBaADHD_genes_overlap, "CpG_overlap_MoBaADHD.csv")
+
+#CpGs significant from MoBa, overlapping with both DMCs and DEGs from Day 20 cells
+Gene_CpGoverlap_MoBa = read.csv("Gene_CpGoverlap_MoBaADHD.csv")
+
+CpGs = subset(moBaADHD_genes_overlap, subset = moBaADHD_genes_overlap$external_gene_name %in% Gene_CpGoverlap_MoBa$Gene_CpGoverlap)
+
+sig_betas = subset(betas_df, subset = rownames(betas_df) %in% CpGs$cgid) 
+sig_betas$cgid = rownames(sig_betas)
+# Subset beta values for all samples per cpg for uniquely annotated CpGs
+
+sig_betas2 = merge(sig_betas, t_ctrl_D20_D7, by = "cgid") #combine dfs so position and betas are in same df
+sig_betas2 <- sig_betas2 %>% pivot_longer(-c(cgid, chr, pos, strand, Name, Type, Probe_rs, Probe_maf, CpG_rs, CpG_maf, SBE_rs, SBE_maf, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, Phantom5_Enhancers, Regulatory_Feature_Group, GencodeCompV12_Group, Start_hg38, End_hg38, Strand_hg38,logFC, AveExpr, t, P.Value, adj.P.Val,B), names_to = "Sample_Name", values_to = "beta") %>% remove_rownames(.) #Make long dataframe for plotting
+sig_betas2 = merge(sig_betas2, targets, by = "Sample_Name")
+sig_betas2$Group = factor(sig_betas2$Group, levels = c("Control_day_0",             "Control_day_7",  "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7",  "Control_day_13" ,"Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+sig_betas2 %>% ggplot(., aes(timepoint, beta), group = Concentration.uM) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=groupcols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", alpha = 0.5, size = 0.7) +
+  labs(x = "", y = "Beta value") +
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ cgid + UCSC_RefGene_Name) +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0("Boxplot_Paracet_MoBaADHDoverlapCpGs_and_genes_betas.pdf"), width = 2, height=3, paper='special')
+dev.off()
+```
+
+
+```{r boxplots beta values}
+genelist = c("RAB3B","CDH2","PDYN","LRFN2","PTPRN2","SORCS2","PRKCB","ZMYND8","CYP46A1","EGR2","GRIK3","CACNA1B","RPH3A","RASGRF1","TSHZ3","CNIH3","SYN3","NPTXR","SHANK2","CX3CL1","NPTX2","FCHSD2","BTBD9","PLCB4","LRP6","NPTN","FGF14","DLGAP3","CHRNB4","APBA1","LRRTM2","SIPA1L1","CDH8","OTOF","OR11H4","OR10H5","ERC1","EPHA4","STAU1","SCGN","CACNG5","CAMK2B","HTR1F","CHRNA7","SLC29A1","SV2A","ABL1","GLRA3","IQSEC2","CRH","HTR1D","OR10H1","CPLX2","P2RX3","SSH1","TNR","LRRC4C","PPFIA1","SYNJ1","FABP5","SLC1A2","SYNGAP1","APP","SLC12A5","ATAD1","SLC24A2","GRIK4","DLGAP1","HTR2B","CACNG2","ATP2A2","APBA2","STAC3","ATXN3","UTS2","GRIK1","SEZ6","OR10J5","GRM4","AKT1","GNAI1","CHRNG","PLCG1","TRIM9","SLC24A1","PHF24","ADARB1","SHANK1","NQO1","HTR2A","SLC1A4","NPFF","LYNX1","SNAP29","MAPT","CACNA1E","SLC12A4","NTF4","PNKD","PRKCE","ZDHHC3","GABRP","ABR","DAGLB","CLSTN1","PRKACA","SYPL1","CACNB4","EXT1","DCC","CALM1","PICK1","GABARAP","CORT","TYROBP","DLG2","SQSTM1","SYT2","RIMS4","DLGAP4","MAP1A","RIT2","GABBR2","TUBB2B","OPRK1","PCDH17","RIMBP2","NAPB","RIMS1","HCRTR2","NSMF","PPFIA4","GSK3A","RNF216","NRG3","CACNG3","TAC1","ANXA9","MCTP1","UNC13A","PSMC5","DLG4","JPH4","SORCS3","TMOD2","SYT12","USP8","SYT9","RIMS2","PCDHB16","TMEM108","SLC7A11","TH","ADCYAP1","KCNB1","RNF19A","SHISA6","GRID1","YWHAG","SRC","PDLIM4","RETN","NEURL1","KCNQ2","FCHSD1","KAT2A","GABRB3","DNM1L","TPRG1L","CHRNB2","ERC2","ARC","NTNG1","GRM3","PMP22","CLSTN2","SLC12A6","CELF4","GABRR3","SNAP23","RAPGEF2","LIN7A","PARK7","PRKAR1B","GABRD","PRKAR2B","PTCHD1","TPGS1","CBLN1","KIF1B","SCTR","CACNA1A","SLC30A1","CALB2","GRM7","HOMER1","GRM1","SYT11","ASIC2","NRXN2","EIF4EBP2","GIT1","KCTD13","PTK2B","CA7","LPAR3","VAMP2","PRRT1","CDH11","CCR2","SLC18A2","APBA3","PINK1","CACNB1","JPH3","GLRA1","NCS1","EXOC4","HTR5A","SLC1A6","P2RX7","HAP1","ADGRB1","DNAJC5","GRIN2D","STX1B","CHRM1","HTR3E","STX1A","LIN7B","SLC12A2","ADRA2A","MTOR","GAD1","MAP1B","CACNA1G","DBN1","STXBP3","KCNIP2","CHRNA9","CACNG4","STXBP2","SRF","DTNBP1","NPY2R","OPHN1","SNCG","PACSIN2","CRHR2")
+
+sig_TR_p200_ann = merge(sig_TR_p200, uniqueGenes, by = "cgid")
+
+CpGs = subset(sig_TR_p200_ann, subset =  sig_TR_p200_ann$external_gene_name %in% genelist)
+
+sig_betas = subset(betas_df, subset = rownames(betas_df) %in% CpGs$cgid) 
+sig_betas$cgid = rownames(sig_betas)
+# Subset beta values for all samples per cpg for uniquely annotated CpGs
+
+sig_betas2 = merge(sig_betas, t_ctrl_D20_D7, by = "cgid") #combine dfs so position and betas are in same df
+sig_betas2 <- sig_betas2 %>% pivot_longer(-c(cgid, chr, pos, strand, Name, Type, Probe_rs, Probe_maf, CpG_rs, CpG_maf, SBE_rs, SBE_maf, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, Phantom5_Enhancers, Regulatory_Feature_Group, GencodeCompV12_Group, Start_hg38, End_hg38, Strand_hg38,logFC, AveExpr, t, P.Value, adj.P.Val,B), names_to = "Sample_Name", values_to = "beta") %>% remove_rownames(.) #Make long dataframe for plotting
+sig_betas2 = merge(sig_betas2, targets, by = "Sample_Name")
+sig_betas2$Group = factor(sig_betas2$Group, levels = c("Control_day_0",             "Control_day_7",  "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7",  "Control_day_13" ,"Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+sig_betas2 %>% ggplot(., aes(timepoint, beta), group = Concentration.uM) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=groupcols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", alpha = 0.5, size = 0.7) +
+  labs(x = "", y = "Beta value") +
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ cgid + UCSC_RefGene_Name) +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0("Boxplot_Paracet_TR_SynapticSignaling.pdf"), width = 14, height=20, paper='special')
+dev.off()
+
+
+###TR top 100
+sig_TR_p200_ann = sig_TR_p200_ann[order(sig_TR_p200_ann$P.Value),]
+
+CpGs = sig_TR_p200_ann$cgid[1:100]
+
+sig_betas = subset(betas_df, subset = rownames(betas_df) %in% CpGs) 
+sig_betas$cgid = rownames(sig_betas)
+# Subset beta values for all samples per cpg for uniquely annotated CpGs
+
+sig_betas2 = merge(sig_betas, t_ctrl_D20_D7, by = "cgid") #combine dfs so position and betas are in same df
+sig_betas2 <- sig_betas2 %>% pivot_longer(-c(cgid, chr, pos, strand, Name, Type, Probe_rs, Probe_maf, CpG_rs, CpG_maf, SBE_rs, SBE_maf, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, Phantom5_Enhancers, Regulatory_Feature_Group, GencodeCompV12_Group, Start_hg38, End_hg38, Strand_hg38,logFC, AveExpr, t, P.Value, adj.P.Val,B), names_to = "Sample_Name", values_to = "beta") %>% remove_rownames(.) #Make long dataframe for plotting
+sig_betas2 = merge(sig_betas2, targets, by = "Sample_Name")
+sig_betas2$Group = factor(sig_betas2$Group, levels = c("Control_day_0",             "Control_day_7",  "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7",  "Control_day_13" ,"Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+sig_betas2 %>% ggplot(., aes(timepoint, beta), group = Concentration.uM) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=groupcols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", alpha = 0.5, size = 0.7) +
+  labs(x = "", y = "Beta value") +
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ cgid + UCSC_RefGene_Name) +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0("Boxplot_Paracet_TRp200_top100.pdf"), width = 14, height=20, paper='special')
+dev.off()
+
+#TRp200 overlap between DEGs and DMGs 1-100
+genes = read.table("/Users/Mari/Dropbox/PhD/Paracetamol/Integration/TRp200_overlap_DEGs_DMGs.txt")
+genes = genes$x
+
+CpGs = subset(sig_TR_p200_ann, subset =  sig_TR_p200_ann$external_gene_name %in% genes)
+CpGs = CpGs[order(CpGs$P.Value),]
+CpGs = CpGs[1:100,]
+
+sig_betas = subset(betas_df, subset = rownames(betas_df) %in% CpGs$cgid) 
+sig_betas$cgid = rownames(sig_betas)
+# Subset beta values for all samples per cpg for uniquely annotated CpGs
+
+sig_betas2 = merge(sig_betas, t_ctrl_D20_D7, by = "cgid") #combine dfs so position and betas are in same df
+sig_betas2 <- sig_betas2 %>% pivot_longer(-c(cgid, chr, pos, strand, Name, Type, Probe_rs, Probe_maf, CpG_rs, CpG_maf, SBE_rs, SBE_maf, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, Phantom5_Enhancers, Regulatory_Feature_Group, GencodeCompV12_Group, Start_hg38, End_hg38, Strand_hg38,logFC, AveExpr, t, P.Value, adj.P.Val,B), names_to = "Sample_Name", values_to = "beta") %>% remove_rownames(.) #Make long dataframe for plotting
+sig_betas2 = merge(sig_betas2, targets, by = "Sample_Name")
+sig_betas2$Group = factor(sig_betas2$Group, levels = c("Control_day_0",             "Control_day_7",  "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7",  "Control_day_13" ,"Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+sig_betas2 %>% ggplot(., aes(timepoint, beta), group = Concentration.uM) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=groupcols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", alpha = 0.5, size = 0.7) +
+  labs(x = "", y = "Beta value") +
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ cgid + UCSC_RefGene_Name) +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0("Boxplot_Paracet_TRp200_overlapDEG_100s.pdf"), width = 14, height=20, paper='special')
+dev.off()
+
+##101-200
+CpGs = subset(sig_TR_p200_ann, subset =  sig_TR_p200_ann$external_gene_name %in% genes)
+CpGs = CpGs[order(CpGs$P.Value),]
+CpGs = CpGs[101:200,]
+
+sig_betas = subset(betas_df, subset = rownames(betas_df) %in% CpGs$cgid) 
+sig_betas$cgid = rownames(sig_betas)
+# Subset beta values for all samples per cpg for uniquely annotated CpGs
+
+sig_betas2 = merge(sig_betas, t_ctrl_D20_D7, by = "cgid") #combine dfs so position and betas are in same df
+sig_betas2 <- sig_betas2 %>% pivot_longer(-c(cgid, chr, pos, strand, Name, Type, Probe_rs, Probe_maf, CpG_rs, CpG_maf, SBE_rs, SBE_maf, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, Phantom5_Enhancers, Regulatory_Feature_Group, GencodeCompV12_Group, Start_hg38, End_hg38, Strand_hg38,logFC, AveExpr, t, P.Value, adj.P.Val,B), names_to = "Sample_Name", values_to = "beta") %>% remove_rownames(.) #Make long dataframe for plotting
+sig_betas2 = merge(sig_betas2, targets, by = "Sample_Name")
+sig_betas2$Group = factor(sig_betas2$Group, levels = c("Control_day_0",             "Control_day_7",  "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7",  "Control_day_13" ,"Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+sig_betas2 %>% ggplot(., aes(timepoint, beta), group = Concentration.uM) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=groupcols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", alpha = 0.5, size = 0.7) +
+  labs(x = "", y = "Beta value") +
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ cgid + UCSC_RefGene_Name) +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0("Boxplot_Paracet_TRp200_overlapDEG_200s.pdf"), width = 14, height=20, paper='special')
+dev.off()
+
+##201-258
+CpGs = subset(sig_TR_p200_ann, subset =  sig_TR_p200_ann$external_gene_name %in% genes)
+CpGs = CpGs[order(CpGs$P.Value),]
+CpGs = CpGs[201:258,]
+
+sig_betas = subset(betas_df, subset = rownames(betas_df) %in% CpGs$cgid) 
+sig_betas$cgid = rownames(sig_betas)
+# Subset beta values for all samples per cpg for uniquely annotated CpGs
+
+sig_betas2 = merge(sig_betas, t_ctrl_D20_D7, by = "cgid") #combine dfs so position and betas are in same df
+sig_betas2 <- sig_betas2 %>% pivot_longer(-c(cgid, chr, pos, strand, Name, Type, Probe_rs, Probe_maf, CpG_rs, CpG_maf, SBE_rs, SBE_maf, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, Phantom5_Enhancers, Regulatory_Feature_Group, GencodeCompV12_Group, Start_hg38, End_hg38, Strand_hg38,logFC, AveExpr, t, P.Value, adj.P.Val,B), names_to = "Sample_Name", values_to = "beta") %>% remove_rownames(.) #Make long dataframe for plotting
+sig_betas2 = merge(sig_betas2, targets, by = "Sample_Name")
+sig_betas2$Group = factor(sig_betas2$Group, levels = c("Control_day_0",             "Control_day_7",  "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7",  "Control_day_13" ,"Control_day_20", "100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+sig_betas2 %>% ggplot(., aes(timepoint, beta), group = Concentration.uM) +
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  scale_fill_manual(values=groupcols) +
+  geom_point(aes(fill = as.factor(Group)), position = position_jitterdodge(dodge.width = 0.8), shape = 21, col = "black", alpha = 0.5, size = 0.7) +
+  labs(x = "", y = "Beta value") +
+  guides(fill=guide_legend(title="Group")) +
+  facet_wrap(~ cgid + UCSC_RefGene_Name) +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_few()+
+  theme(legend.position="bottom")
+dev.copy(pdf,paste0("Boxplot_Paracet_TRp200_overlapDEG_250s.pdf"), width = 12, height=15, paper='special')
+dev.off()
+
+```
+
+
+
+#Annotated DM CpGs
+```{r bar plots comparisons}
+#Relation to island
+#-----Pairwise Paracetamol---------
+sig_d7_p100_ctrlann = subset(sig_d7_p100_ctrl, select = c("cgid","Phantom5_Enhancers", "Relation_to_Island"))
+sig_d7_p100_ctrlann = merge(sig_d7_p100_ctrlann, uniqueRelToGenes, by = "cgid", all.x = TRUE)
+
+RelationToIsland = as.data.frame(table(sig_d7_p100_ctrlann$Relation_to_Island))
+colnames(RelationToIsland) = c("Variable","Count")
+RelationToIsland$Type = "Relation to CGI"
+RelationToIsland$Group = "Day 7: 0 vs 100 uM paracetamol"
+RelationToIslandA = RelationToIsland
+
+sig_d7_p200_ctrlann = subset(sig_d7_p200_ctrl, select = c("cgid","Phantom5_Enhancers", "Relation_to_Island"))
+sig_d7_p200_ctrlann = merge(sig_d7_p200_ctrlann, uniqueRelToGenes, by = "cgid", all.x = TRUE)
+
+RelationToIsland = as.data.frame(table(sig_d7_p200_ctrlann$Relation_to_Island))
+colnames(RelationToIsland) = c("Variable","Count")
+RelationToIsland$Type = "Relation to CGI"
+RelationToIsland$Group = "Day 7: 0 vs 200 uM paracetamol"
+RelationToIslandB = RelationToIsland
+
+sig_d20_p100_ctrlann = subset(sig_d20_p100_ctrl, select = c("cgid","Phantom5_Enhancers", "Relation_to_Island"))
+sig_d20_p100_ctrlann = merge(sig_d20_p100_ctrlann, uniqueRelToGenes, by = "cgid", all.x = TRUE)
+
+RelationToIsland = as.data.frame(table(sig_d20_p100_ctrlann$Relation_to_Island))
+colnames(RelationToIsland) = c("Variable","Count")
+RelationToIsland$Type = "Relation to CGI"
+RelationToIsland$Group = "Day 20: 0 vs 100 uM paracetamol"
+RelationToIslandC = RelationToIsland
+
+sig_d20_p200_ctrlann = subset(sig_d20_p200_ctrl, select = c("cgid","Phantom5_Enhancers", "Relation_to_Island"))
+sig_d20_p200_ctrlann = merge(sig_d20_p200_ctrlann, uniqueRelToGenes, by = "cgid", all.x = TRUE)
+
+RelationToIsland = as.data.frame(table(sig_d20_p200_ctrlann$Relation_to_Island))
+colnames(RelationToIsland) = c("Variable","Count")
+RelationToIsland$Type = "Relation to CGI"
+RelationToIsland$Group = "Day 20: 0 vs 200 uM paracetamol"
+RelationToIslandD = RelationToIsland
+
+
+sig_d20_p200_p100ann = subset(sig_d20_p200_p100, select = c("cgid","Phantom5_Enhancers", "Relation_to_Island"))
+sig_d20_p200_p100ann = merge(sig_d20_p200_p100ann, uniqueRelToGenes, by = "cgid", all.x = TRUE)
+
+RelationToIsland = as.data.frame(table(sig_d20_p200_p100ann$Relation_to_Island))
+colnames(RelationToIsland) = c("Variable","Count")
+RelationToIsland$Type = "Relation to CGI"
+RelationToIsland$Group = "Day 20: 100 vs 200 uM paracetamol"
+RelationToIslandE = RelationToIsland
+
+
+sig_TR_p200ann = subset(sig_TR_p200, select = c("cgid","Phantom5_Enhancers", "Relation_to_Island"))
+sig_TR_p200ann = merge(sig_TR_p200ann, uniqueRelToGenes, by = "cgid", all.x = TRUE)
+
+RelationToIsland = as.data.frame(table(sig_TR_p200ann$Relation_to_Island))
+colnames(RelationToIsland) = c("Variable","Count")
+RelationToIsland$Type = "Relation to CGI"
+RelationToIsland$Group = "Time response: 200 uM paracetamol"
+RelationToIslandF = RelationToIsland
+
+#-----------------
+
+RelToIs = rbind(RelationToIslandA, RelationToIslandB, RelationToIslandC, RelationToIslandD, RelationToIslandE,RelationToIslandF)
+RelToIs$Variable = factor(RelToIs$Variable, levels = c("N_Shelf", "N_Shore","Island", "S_Shelf", "S_Shore", "OpenSea"))
+RelToIs$Group = factor(RelToIs$Group, levels = c("Day 7: 0 vs 100 uM paracetamol", "Day 7: 0 vs 200 uM paracetamol", "Day 20: 0 vs 100 uM paracetamol", "Day 20: 0 vs 200 uM paracetamol","Day 20: 100 vs 200 uM paracetamol", "Time response: 200 uM paracetamol"))
+
+ggplot(RelToIs, aes(x = Group, y = Count, fill = Variable))+
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = colpal)+
+  labs(x = "", title = "Differentially methylated CpGs in relation to Island")+
+  theme_few()+ 
+  theme(axis.text.x = element_text(angle = 90))
+dev.copy(pdf,paste0("SigCpGs.RelToIsland.paracet.pdf"),height = 7, width = 8, paper='special')
+dev.off()
+
+RelToIs2 = RelToIs %>% 
+ group_by(Group) %>% 
+ mutate(Percentage=Count/sum(Count)*100) %>% as.data.frame(.)
+
+RelToIs2$Variable = factor(RelToIs2$Variable, levels = c("N_Shelf", "N_Shore","Island", "S_Shelf", "S_Shore", "OpenSea"))
+RelToIs2$Group = factor(RelToIs2$Group, levels =  c("Day 7: 0 vs 100 uM paracetamol", "Day 7: 0 vs 200 uM paracetamol", "Day 20: 0 vs 100 uM paracetamol", "Day 20: 0 vs 200 uM paracetamol","Day 20: 100 vs 200 uM paracetamol", "Time response: 200 uM paracetamol"))
+
+
+ggplot(RelToIs2, aes(x = Group, y = Percentage, fill = Variable))+
+  geom_bar(stat = "identity") +
+   scale_fill_manual(values = colpal)+
+  labs(x = "", title = "Differentially methylated CpGs in relation to Island", y = "%")+
+  theme_few()+ 
+  theme(axis.text.x = element_text(angle = 90))
+dev.copy(pdf,paste0("SigCpGs.RelToIsland.paracetamol.Percent.pdf"),height = 7, width = 8, paper='special')
+dev.off()
+
+
+###---Relation to gene-----
+RelationToGene = as.data.frame(table(sig_d7_p100_ctrlann$Relation_to_gene))
+colnames(RelationToGene) = c("Variable","Count")
+RelationToGene$Type = "Relation to gene"
+RelationToGene$Group = "Day 7: 0 vs 100 uM paracetamol"
+RelationToGeneA = RelationToGene
+
+RelationToGene = as.data.frame(table(sig_d7_p200_ctrlann$Relation_to_gene))
+colnames(RelationToGene) = c("Variable","Count")
+RelationToGene$Type = "Relation to gene"
+RelationToGene$Group = "Day 7: 0 vs 200 uM paracetamol"
+RelationToGeneB = RelationToGene
+
+RelationToGene = as.data.frame(table(sig_d20_p100_ctrlann$Relation_to_gene))
+colnames(RelationToGene) = c("Variable","Count")
+RelationToGene$Type = "Relation to gene"
+RelationToGene$Group = "Day 20: 0 vs 100 uM paracetamol"
+RelationToGeneC = RelationToGene
+
+RelationToGene = as.data.frame(table(sig_d20_p200_ctrlann$Relation_to_gene))
+colnames(RelationToGene) = c("Variable","Count")
+RelationToGene$Type = "Relation to gene"
+RelationToGene$Group = "Day 20: 0 vs 200 uM paracetamol"
+RelationToGeneD = RelationToGene
+
+RelationToGene = as.data.frame(table(sig_d20_p200_p100ann$Relation_to_gene))
+colnames(RelationToGene) = c("Variable","Count")
+RelationToGene$Type = "Relation to gene"
+RelationToGene$Group = "Day 20: 100 vs 200 uM paracetamol"
+RelationToGeneE = RelationToGene
+
+
+RelationToGene = as.data.frame(table(sig_TR_p200ann$Relation_to_gene))
+colnames(RelationToGene) = c("Variable","Count")
+RelationToGene$Type = "Relation to gene"
+RelationToGene$Group = "Time response: 200 uM paracetamol"
+RelationToGeneF = RelationToGene
+
+#-----------------
+
+RelToGene = rbind(RelationToGeneA, RelationToGeneB, RelationToGeneC, RelationToGeneD, RelationToGeneE, RelationToGeneF)
+RelToGene$Variable = factor(RelToGene$Variable,  levels = c("TSS1500", "TSS200","5'UTR", "1stExon", "Body", "ExonBnd", "3'UTR" ))
+RelToGene$Group = factor(RelToGene$Group, levels =  c("Day 7: 0 vs 100 uM paracetamol", "Day 7: 0 vs 200 uM paracetamol", "Day 20: 0 vs 100 uM paracetamol", "Day 20: 0 vs 200 uM paracetamol","Day 20: 100 vs 200 uM paracetamol", "Time response: 200 uM paracetamol"))
+
+ggplot(RelToGene, aes(x = Group, y = Count, fill = Variable))+
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = colpal)+
+  labs(x = "", title = "Differentially methylated CpGs in relation to Island")+
+  theme_few()+ 
+  theme(axis.text.x = element_text(angle = 90))
+dev.copy(pdf,paste0("SigCpGs.RelToGene.paracetamol.pdf"),height = 7, width = 8, paper='special')
+dev.off()
+
+RelToGene2 = RelToGene %>% 
+ group_by(Group) %>% 
+ mutate(Percentage=Count/sum(Count)*100) %>% as.data.frame(.)
+
+RelToGene2$Variable = factor(RelToGene2$Variable, levels = c("TSS1500", "TSS200","5'UTR", "1stExon", "Body", "ExonBnd", "3'UTR" ))
+RelToGene2$Group = factor(RelToGene2$Group, levels = c("Day 7: 0 vs 100 uM paracetamol", "Day 7: 0 vs 200 uM paracetamol", "Day 20: 0 vs 100 uM paracetamol", "Day 20: 0 vs 200 uM paracetamol","Day 20: 100 vs 200 uM paracetamol", "Time response: 200 uM paracetamol"))
+
+
+ggplot(RelToGene2, aes(x = Group, y = Percentage, fill = Variable))+
+  geom_bar(stat = "identity") +
+   scale_fill_manual(values = colpal)+
+  labs(x = "", title = "Differentially methylated CpGs in relation to Island", y = "%")+
+  theme_few()+ 
+  theme(axis.text.x = element_text(angle = 90))
+dev.copy(pdf,paste0("SigCpGs.RelToGene.paracetamol.Percent.pdf"),height = 7, width = 8, paper='special')
+dev.off()
+
+###--------Enhancers----------
+
+sig_d7_p100_ctrlann = sig_d7_p100_ctrlann %>% mutate_each(funs(empty_as_na), matches("Phantom5_Enhancers")) 
+Enhancers = as.data.frame(table(!is.na(sig_d7_p100_ctrlann$Phantom5_Enhancers)))
+colnames(Enhancers) = c("Variable","Count")
+Enhancers  =Enhancers[2,]
+Enhancers$Type = "Regulatory element"
+Enhancers$Variable = "Enhancer"
+Enhancers$Group = "Day 7: 0 vs 100 uM paracetamol"
+EnhancersA = Enhancers
+
+sig_d7_p200_ctrlann = sig_d7_p200_ctrlann %>% mutate_each(funs(empty_as_na), matches("Phantom5_Enhancers")) 
+Enhancers = as.data.frame(table(!is.na(sig_d7_p200_ctrlann$Phantom5_Enhancers)))
+colnames(Enhancers) = c("Variable","Count")
+Enhancers  =Enhancers[2,]
+Enhancers$Type = "Regulatory element"
+Enhancers$Variable = "Enhancer"
+Enhancers$Group = "Day 7: 0 vs 200 uM paracetamol"
+EnhancersB = Enhancers
+
+sig_d20_p100_ctrlann = sig_d20_p100_ctrlann %>% mutate_each(funs(empty_as_na), matches("Phantom5_Enhancers")) 
+Enhancers = as.data.frame(table(!is.na(sig_d20_p100_ctrlann$Phantom5_Enhancers)))
+colnames(Enhancers) = c("Variable","Count")
+Enhancers  =Enhancers[2,]
+Enhancers$Type = "Regulatory element"
+Enhancers$Variable = "Enhancer"
+Enhancers$Group = "Day 20: 0 vs 100 uM paracetamol"
+EnhancersC = Enhancers
+
+sig_d20_p200_ctrlann = sig_d20_p200_ctrlann %>% mutate_each(funs(empty_as_na), matches("Phantom5_Enhancers")) 
+Enhancers = as.data.frame(table(!is.na(sig_d20_p200_ctrlann$Phantom5_Enhancers)))
+colnames(Enhancers) = c("Variable","Count")
+Enhancers  =Enhancers[2,]
+Enhancers$Type = "Regulatory element"
+Enhancers$Variable = "Enhancer"
+Enhancers$Group = "Day 20: 0 vs 200 uM paracetamol"
+EnhancersD = Enhancers
+
+sig_d20_p200_p100ann = sig_d20_p200_p100ann %>% mutate_each(funs(empty_as_na), matches("Phantom5_Enhancers")) 
+Enhancers = as.data.frame(table(!is.na(sig_d20_p200_p100ann$Phantom5_Enhancers)))
+colnames(Enhancers) = c("Variable","Count")
+Enhancers  =Enhancers[2,]
+Enhancers$Type = "Regulatory element"
+Enhancers$Variable = "Enhancer"
+Enhancers$Group = "Day 20: 100 vs 200 uM paracetamol"
+EnhancersE = Enhancers
+
+sig_TR_p200ann = sig_TR_p200ann %>% mutate_each(funs(empty_as_na), matches("Phantom5_Enhancers")) 
+Enhancers = as.data.frame(table(!is.na(sig_TR_p200ann$Phantom5_Enhancers)))
+colnames(Enhancers) = c("Variable","Count")
+Enhancers  =Enhancers[2,]
+Enhancers$Type = "Regulatory element"
+Enhancers$Variable = "Enhancer"
+Enhancers$Group = "Time response: 200 uM paracetamol"
+EnhancersI = Enhancers
+#-----------------
+
+RelEnhancers = rbind(EnhancersA, EnhancersB, EnhancersC, EnhancersD, EnhancersE, EnhancersI)
+RelEnhancers$Group = factor(RelEnhancers$Group, levels = c("Day 7: 0 vs 100 uM paracetamol", "Day 7: 0 vs 200 uM paracetamol", "Day 20: 0 vs 100 uM paracetamol", "Day 20: 0 vs 200 uM paracetamol","Day 20: 100 vs 200 uM paracetamol", "Time response: 200 uM paracetamol"))
+
+ggplot(RelEnhancers, aes(x = Group, y = Count, fill = Variable))+
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = colpal)+
+  labs(x = "", title = "Differentially methylated CpGs in relation to regulatory elements")+
+  theme_few()+ 
+  theme(axis.text.x = element_text(angle = 90))
+dev.copy(pdf,paste0("SigCpGs.Enhancers.paracetamol.pdf"),height = 7, width = 8, paper='special')
+dev.off()
+
+```
+
+```{r visualize global methylation - ALL CpGs}
+
+#CpGs annotated to RELATION TO ISLAND
+betas_df$cgid = rownames(betas_df)
+betas_df_ann = merge(betas_df, annoEPICsub, by = "cgid")
+betas_df_ann = merge(betas_df_ann,uniqueRelToGenes, by = "cgid" ) %>%  mutate_each(funs(empty_as_na), matches("Phantom5_Enhancers")) 
+betas_df_ann = subset(betas_df_ann, select = c("cgid","1-sc1-D0-ctrl-A", "2-sc1-D0-ctrl-B", "3-sc2-D0-ctrl-A",
+"18-sc1-D0-ctrl-C","4-sc1-D7-ctrl-A","5-sc2-D7-ctrl-A","20-sc1-D7-ctrl-B","248-D7-CTRL" , "6-sc1-D7-P100-A",   "7-sc2-D7-P100-A","21-sc1-D7-P100-B","22-sc2-D7-P100-B","8-sc1-D7-P200-A","9-sc2-D7-P200-A", "23-sc1-D7-P200-B", "24-sc2-D7-P200-B","10-sc1-D13-ctrl-A","11-sc2-D13-ctrl-A","25-sc1-D13-ctrl-B","26-sc2-D13-ctrl-B", "12-sc1-D20-ctrl-A","13-sc2-D20-ctrl-A","28-sc1-D20-ctrl-B" ,"29-sc2-D20-ctrl-B","14-sc1-D20-P100-A" , "15-sc2-D20-P100-A","30-sc1-D20-P100-B" ,"31-sc2-D20-P100-B","16-sc1-D20-P200-A","17-sc2-D20-P200-A", "32-sc1-D20-P200-B","33-sc2-D20-P200-B","186-D20-Ctr-A","187-D20-Ctr-B" ,"189-D20-P100-A","190-D20-P100-B",        "1-d0-1","2-d0-2","3-d7-p100-1", "4-d7-p100-2","5-d7-ctr-1","6-d7-ctr-2","7-d7-p200", "Relation_to_Island", "Phantom5_Enhancers", "Relation_to_gene"))
+
+RelToIsland = betas_df_ann %>% group_by(Relation_to_Island)
+RelToIsland = RelToIsland %>% summarize_if(is.numeric, mean) %>%  as.data.frame(.) %>% pivot_longer(-c(Relation_to_Island), names_to = "Sample_Name", values_to = "Average_beta") %>% as.data.frame(.) %>%  merge(., targets, by = "Sample_Name")
+RelToIsland$Category = "Relation_to_CGI"
+RelToIsland$Type = RelToIsland$Relation_to_Island
+
+#CpGs annotated to ENHANCERS
+Phantom5Enhancer = betas_df_ann %>% summarize_if(is.numeric, mean) %>%  as.data.frame(.) 
+Phantom5Enhancer$Type = "Enhancer"
+Phantom5Enhancer = Phantom5Enhancer %>% pivot_longer(-c(Type), names_to = "Sample_Name", values_to = "Average_beta")  %>% as.data.frame(.) %>% merge(., targets, by = "Sample_Name")
+Phantom5Enhancer$Category = "Regulatory_Element"
+
+#CpGs annotated to RELATION TO GENES
+RelToGene = betas_df_ann %>% group_by(Relation_to_gene)
+RelToGene = RelToGene %>% summarize_if(is.numeric, mean) %>%  as.data.frame(.) %>% pivot_longer(-c(Relation_to_gene), names_to = "Sample_Name", values_to = "Average_beta") %>% as.data.frame(.) %>%  merge(., targets, by = "Sample_Name")
+RelToGene$Category = "Relation_to_gene"
+RelToGene$Type = RelToGene$Relation_to_gene
+
+
+allreg = dplyr::bind_rows(RelToIsland, Phantom5Enhancer, RelToGene)
+allreg$Type = factor(allreg$Type, levels = c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf", "OpenSea", "TSS1500", "TSS200","5'UTR", "1stExon", "Body", "ExonBnd", "3'UTR", "Enhancer"))
+allreg$Group = factor(allreg$Group, levels =c("Control_day_0","Control_day_7","100_uM_paracetamol_day_7" , "200_uM_paracetamol_day_7","Control_day_13",  "Control_day_20", "100_uM_paracetamol_day_20","200_uM_paracetamol_day_20"))
+
+ggplot(allreg, aes(x = Type, y = Average_beta))+
+  geom_boxplot(aes(fill = as.factor(timepoint)))+
+  geom_point(aes(fill = as.factor(timepoint)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 1, alpha = 0.5)+
+  ylim(0,1) +
+  scale_fill_manual(values = daycols) +
+  labs(x = "", title = "Global methylation", fill = "Day", y = "Average betas")+
+  theme_few() +theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("Global_methylation_all_days.pdf"),height = 7, width = 10, paper='special')
+dev.off()
+
+ggplot(allreg, aes(x = Type, y = Average_beta))+
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  geom_point(aes(fill = as.factor(Group)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 1, alpha = 0.5)+
+  ylim(0,1) +
+  scale_fill_manual(values = groupcols) +
+  labs(x = "", title = "Global methylation", fill = "Group", y = "Average betas")+
+  theme_few() +theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("Global_methylation_all_groups.pdf"),height = 7, width = 12, paper='special')
+dev.off()
+
+ggplot(allreg, aes(x = timepoint, y = Average_beta))+
+  geom_boxplot(aes(fill = as.factor(timepoint)))+
+  geom_point(aes(fill = as.factor(timepoint)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 1, alpha = 0.5)+
+  scale_fill_manual(values=daycols) +
+  labs(x = "", title = "Global methylation", fill = "Day", y = "Average betas")+
+  theme_few() +
+  facet_wrap(~ Category+Type, scales = "free_y") +theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("Global_methylation_facet_days.pdf"),height = 8, width = 10, paper='special')
+dev.off()
+
+ggplot(allreg, aes(x = timepoint, y = Average_beta))+
+  geom_boxplot(aes(fill = as.factor(Group)))+
+  geom_point(aes(fill = as.factor(Group)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 1, alpha = 0.5)+
+  scale_fill_manual(values=groupcols) +
+  labs(x = "", title = "Global methylation", fill = "Day", y = "Average betas")+
+  theme_few() +
+  facet_wrap(~ Category+Type, scales = "free_y")+theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("Global_methylation_facet_groups.pdf"),height = 9, width = 11, paper='special')
+dev.off()
+
+##ALL CPGs independent of category: Mean of all CPGs per sample------------
+betas_df_ann2 = merge(betas_df, annoEPICsub, by = "cgid")
+betas_df_ann2 = subset(betas_df_ann2, select = c("cgid","1-sc1-D0-ctrl-A", "2-sc1-D0-ctrl-B", "3-sc2-D0-ctrl-A",
+"18-sc1-D0-ctrl-C","4-sc1-D7-ctrl-A","5-sc2-D7-ctrl-A","20-sc1-D7-ctrl-B","248-D7-CTRL" , "6-sc1-D7-P100-A",   "7-sc2-D7-P100-A","21-sc1-D7-P100-B","22-sc2-D7-P100-B","8-sc1-D7-P200-A","9-sc2-D7-P200-A", "23-sc1-D7-P200-B", "24-sc2-D7-P200-B","10-sc1-D13-ctrl-A","11-sc2-D13-ctrl-A","25-sc1-D13-ctrl-B","26-sc2-D13-ctrl-B", "12-sc1-D20-ctrl-A","13-sc2-D20-ctrl-A","28-sc1-D20-ctrl-B" ,"29-sc2-D20-ctrl-B","14-sc1-D20-P100-A" , "15-sc2-D20-P100-A","30-sc1-D20-P100-B" ,"31-sc2-D20-P100-B","16-sc1-D20-P200-A","17-sc2-D20-P200-A", "32-sc1-D20-P200-B","33-sc2-D20-P200-B","186-D20-Ctr-A","187-D20-Ctr-B" ,"189-D20-P100-A","190-D20-P100-B",        "1-d0-1","2-d0-2","3-d7-p100-1", "4-d7-p100-2","5-d7-ctr-1","6-d7-ctr-2","7-d7-p200"))
+
+allmean = betas_df_ann2 %>% summarize_if(is.numeric, mean) 
+allmean$Type = "Average_betas"
+allmean = allmean%>% as.data.frame(.) %>% pivot_longer(-c(Type), names_to = "Sample_Name", values_to = "Average_beta")  %>% as.data.frame(.)%>% merge(., targets, by = "Sample_Name")
+allmean$Group = factor(allmean$Group, levels = c("Control_day_0","Control_day_7","100_uM_paracetamol_day_7" , "200_uM_paracetamol_day_7","Control_day_13",  "Control_day_20", "100_uM_paracetamol_day_20","200_uM_paracetamol_day_20"))
+
+
+compare_means(Average_beta ~ timepoint, allmean, method = "t.test", paired = FALSE, group.by = NULL, ref.group = NULL)
+my_comparisons <- list( c("0", "7"), c("0", "13"), c("0", "20"), c("7", "13"), c("7", "20"),  c("13", "20"))
+
+ggplot(allmean, aes(x = timepoint, y = Average_beta))+
+ geom_boxplot(aes(fill = as.factor(timepoint)))+
+  geom_point(aes(fill = as.factor(timepoint)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 2, alpha = 0.5)+
+  scale_fill_manual(values=daycols) +
+  labs(x = "", title = "Global methylation: All CpGs", fill = "Day", y = "Average betas")+
+  #stat_compare_means(label.y = 0.99,method = "anova")+
+  stat_compare_means(label.y = c(0.67, 0.68, 0.69, 0.70, 0.71, 0.72),comparisons = my_comparisons, method = "t.test", label = "p.signif",  ref.group = "0", tip.length = 0.1)+
+  scale_y_continuous(limits=c(0.57, 0.82)) +
+  theme_few() +theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("Global_methylation_allCPGs.pdf"),height = 6, width = 8, paper='special')
+dev.off()
+
+compare_means(Average_beta ~ Group, allmean, method = "t.test", paired = FALSE, group.by = NULL, ref.group = NULL)
+my_comparisons <- list( c("Control_day_7", "100_uM_paracetamol_day_7"), c("Control_day_7", "200_uM_paracetamol_day_7"), c( "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7"), c("Control_day_20", "100_uM_paracetamol_day_20"),c("Control_day_20", "200_uM_paracetamol_day_20"), c("100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+
+ggplot(allmean, aes(x = Group, y = Average_beta))+
+ geom_boxplot(aes(fill = as.factor(Group)))+
+  geom_point(aes(fill = as.factor(Group)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 2, alpha = 0.5)+
+  scale_fill_manual(values=groupcols) +
+  labs(x = "", title = "Global methylation: All CpGs", fill = "Day", y = "Average betas")+
+  stat_compare_means(label.y = c(0.67, 0.68, 0.69, 0.67, 0.68, 0.69),comparisons = my_comparisons, method = "t.test", label = "p.signif", tip.length = 0.1)+
+  scale_y_continuous(limits=c(0.57, 0.82)) +
+  theme_few() +theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("Global_methylation_group_allCPGs.pdf"),height = 6, width = 8, paper='special')
+dev.off()
+
+```
+
+
+```{r Global methylation Significant CpGs}
+##----Significant CpGs Citalopram comparisons-----------
+sig = c(rownames(sig_d7_p100_ctrl), rownames(sig_d7_p200_ctrl), rownames(sig_d20_p100_ctrl), rownames(sig_d20_p200_ctrl), rownames(sig_d20_p200_p100), rownames(sig_TR_p200))
+sig = unique(sig)
+
+betas_sig_mean = betas_df_ann2[betas_df_ann2$cgid %in% sig,] %>% summarize_if(is.numeric, mean) 
+betas_sig_mean$Type = "Average_betas"
+betas_sig_mean = betas_sig_mean%>% as.data.frame(.) %>% pivot_longer(-c(Type), names_to = "Sample_Name", values_to = "Average_beta")  %>% as.data.frame(.)%>% merge(., targets, by = "Sample_Name")
+betas_sig_mean$Group = factor(betas_sig_mean$Group, levels = c("Control_day_0","Control_day_7","100_uM_paracetamol_day_7" , "200_uM_paracetamol_day_7","Control_day_13",  "Control_day_20", "100_uM_paracetamol_day_20","200_uM_paracetamol_day_20"))
+
+compare_means(Average_beta ~ timepoint, betas_sig_mean, method = "t.test", paired = FALSE, group.by = NULL, ref.group = NULL)
+my_comparisons <- list( c("0", "7"), c("0", "13"), c("0", "20"), c("7", "13"), c("7", "20"),  c("13", "20"))
+
+
+ggplot(betas_sig_mean, aes(x = timepoint, y = Average_beta))+
+ geom_boxplot(aes(fill = as.factor(timepoint)))+
+  geom_point(aes(fill = as.factor(timepoint)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 2, alpha = 0.5)+
+  scale_fill_manual(values=daycols) +
+  labs(x = "", title = "Global methylation: Significant CpGs, paracetamol", fill = "Day", y = "Average betas")+
+  stat_compare_means(label.y = c(0.77, 0.78, 0.79, 0.80, 0.81, 0.82),comparisons = my_comparisons, method = "t.test", label = "p.signif",  ref.group = "0", tip.length = 0.05)+
+  scale_y_continuous(limits=c(0.57, 0.83)) +
+  theme_few() +theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("Global_methylation_allSigParacetamolCpGs.pdf"),height = 6, width = 8, paper='special')
+dev.off()
+
+compare_means(Average_beta ~ Group, betas_sig_mean, method = "t.test", paired = FALSE, group.by = NULL, ref.group = NULL)
+my_comparisons <- list(c("Control_day_7", "100_uM_paracetamol_day_7"), c("Control_day_7", "200_uM_paracetamol_day_7"), c( "100_uM_paracetamol_day_7", "200_uM_paracetamol_day_7"), c("Control_day_20", "100_uM_paracetamol_day_20"),c("Control_day_20", "200_uM_paracetamol_day_20"), c("100_uM_paracetamol_day_20", "200_uM_paracetamol_day_20"))
+
+
+ggplot(betas_sig_mean, aes(x = Group, y = Average_beta))+
+ geom_boxplot(aes(fill = as.factor(Group)))+
+  geom_point(aes(fill = as.factor(Group)), pch = 21, position = position_jitterdodge(dodge.width = 0.75), col = "black", size = 2, alpha = 0.5)+
+  scale_fill_manual(values=groupcols) +
+  labs(x = "", title = "Global methylation: Significant CpGs, paracetamol", fill = "Day", y = "Average betas")+
+  stat_compare_means(label.y = c(0.78, 0.79, 0.80, 0.78, 0.79, 0.80),comparisons = my_comparisons, method = "t.test", label = "p.signif", tip.length = 0.05)+
+  scale_y_continuous(limits=c(0.57, 0.83)) +
+  theme_few() +theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0("Global_methylation_group_allSigParacetamolCpGs.pdf"),height = 6, width = 8, paper='special')
+dev.off()
+```
+
+
+```{r Density plots of mean betas }
+#Differences on day 7:
+
+#Day 7 p100 vs ctrl
+sigsites = rownames(sig_d7_p100_ctrl) #Significant sites 
+isDMP7p100ctrl= rownames(betas) %in% sigsites #Boolean vector with significant sites
+d7_p100_ctrl_avg.betas = avg.betas[,1:2] 
+
+create.densityScatter(d7_p100_ctrl_avg.betas, is.special=isDMP7p100ctrl, sparse.points=0.001, add.text.cor=TRUE) + 
+  labs(x="mean beta: Day 7 ctrl", y="mean beta: Day 7 P100") +
+  coord_fixed() + theme_few()
+dev.copy(pdf,paste0("DensityScatter_d7_p100_ctrl.pdf"),height = 8, width = 8, paper='special')
+dev.off()
+
+
+#Day 7 p200 vs ctrl
+sigsites = rownames(sig_d7_p200_ctrl) #Significant sites 
+isDMP7p200ctrl= rownames(betas) %in% sigsites #Boolean vector with significant sites
+d7_p200_ctrl_avg.betas = avg.betas[,c(1,3)] 
+
+create.densityScatter(d7_p200_ctrl_avg.betas, is.special=isDMP7p200ctrl, sparse.points=0.001, add.text.cor=TRUE) + 
+  labs(x="mean beta: Day 7 ctrl", y="mean beta: Day 7 P200") +
+  coord_fixed() + theme_few()
+dev.copy(pdf,paste0("DensityScatter_d7_p200_ctrl.pdf"),height = 8, width = 8, paper='special')
+dev.off()
+
+
+#Day 7 p200 vs p100
+sigsites = rownames(sig_d7_p200_p100) #Significant sites 
+isDMP7p200p100= rownames(betas) %in% sigsites #Boolean vector with significant sites
+d7_p200_p100_avg.betas = avg.betas[,c(2,3)] 
+
+create.densityScatter(d7_p200_p100_avg.betas, is.special=isDMP7p200p100, sparse.points=0.001, add.text.cor=TRUE) + 
+  labs(x="mean beta: Day 7 P100", y="mean beta: Day 7 P200") +
+  coord_fixed() + theme_few()
+dev.copy(pdf,paste0("DensityScatter_d7_P100p200.pdf"),height = 8, width = 8, paper='special')
+dev.off()
+
+#-day 20: ---------------------------------------------------------------------------------
+
+#Day 20 P100 - ctrl
+sigsites = rownames(sig_d20_p100_ctrl) #Significant sites 
+isDMP20p100ctrl= rownames(betas) %in% sigsites #Boolean vector with significant sites
+d20_p100_ctrl_avg.betas = avg.betas[,c(4,5)] 
+
+create.densityScatter(d20_p100_ctrl_avg.betas, is.special=isDMP20p100ctrl, sparse.points=0.001, add.text.cor=TRUE) + 
+  labs(x="mean beta: Day 20 ctrl", y="mean beta: Day 20 P100") +
+  coord_fixed() + theme_few()
+dev.copy(pdf,paste0("DensityScatter_d20_p100_ctrl.pdf"),height = 8, width = 8, paper='special')
+dev.off()
+
+#Day 20 P200 - ctrl
+sigsites = rownames(sig_d20_p200_ctrl) #Significant sites 
+isDMP20p200ctrl= rownames(betas) %in% sigsites #Boolean vector with significant sites
+d20_p200_ctrl_avg.betas = avg.betas[,c(4,6)] 
+
+create.densityScatter(d20_p200_ctrl_avg.betas, is.special=isDMP20p200ctrl, sparse.points=0.001, add.text.cor=TRUE) + 
+  labs(x="mean beta: Day 20 ctrl", y="mean beta: Day 20 P200") +
+  coord_fixed() + theme_few()
+dev.copy(pdf,paste0("DensityScatter_d20_p200_ctrl.pdf"),height = 8, width = 8, paper='special')
+dev.off()
+
+#Day 20 P200 - P100
+sigsites = rownames(sig_d20_p200_p100) #Significant sites 
+isDMP20p200p100= rownames(betas) %in% sigsites #Boolean vector with significant sites
+d20_p200_p100_avg.betas = avg.betas[,c(5,6)]
+
+create.densityScatter(d20_p200_p100_avg.betas, is.special=isDMP20p200p100, sparse.points=0.001, add.text.cor=TRUE) + 
+  labs(x="mean beta: Day 20 P100", y="mean beta: Day 20 P200") +
+  coord_fixed() + theme_few()
+dev.copy(pdf,paste0("DensityScatter_d20_P100p200.pdf"),height = 8, width = 8, paper='special')
+dev.off()
+
+```
+
+## Mean difference in beta values
+
+```{r Mean difference in BETAS D7-P100 vs ctrl}
+#Differences on day 7:
+#Day 7 p100 vs ctrl 
+d7_p100vsCtrlmeandiff = d7_p100_ctrl_avg.betas %>% mutate(mean.diff =  d7_p100-  d7ctrl) 
+
+#identical(rownames(t_b_6), rownames(d0_d6meandiff)) #False
+#Change order of mean.diff to equal to t_b_6
+d7_p100vsCtrlmeandiff = d7_p100vsCtrlmeandiff[order(match(rownames(d7_p100vsCtrlmeandiff), t_d7_p100_ctrl$Name)), , drop = FALSE]
+identical(rownames(t_d7_p100_ctrl), rownames(d7_p100vsCtrlmeandiff))#True
+
+d7_p100vsCtrlmeandiff = cbind(t_d7_p100_ctrl, d7_p100vsCtrlmeandiff)#Merge med annotert resultat av DE
+d7_p100vsCtrlmeandiff = merge(d7_p100vsCtrlmeandiff, uniqueGenes, by = "cgid", all.x = T, all.y = F) #Merge with Uniquegenes
+d7_p100vsCtrlmeandiff = d7_p100vsCtrlmeandiff[order(d7_p100vsCtrlmeandiff$P.Value),]#Order by P.value
+
+keyvals.colour <- ifelse(
+    d7_p100vsCtrlmeandiff$adj.P.Val >= 0.05 |  d7_p100vsCtrlmeandiff$adj.P.Val == "NA", 'grey30',
+      ifelse(d7_p100vsCtrlmeandiff$adj.P.Val < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant (p < 0.05)'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(d7_p100vsCtrlmeandiff,
+    lab = d7_p100vsCtrlmeandiff$external_gene_name,
+    selectLab = d7_p100vsCtrlmeandiff$external_gene_name[1:100],
+    labSize = 5,
+    x = 'mean.diff',
+    y = 'P.Value',
+    pointSize = 0.1,
+    xlim = c(-0.3,0.3),
+    ylim = c(0, 10),
+    xlab = "Mean difference in beta values",
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    gridlines.major =F,
+    gridlines.minor = F,
+    title = "Day 7: 100 uM paracetamol vs control",
+    subtitle = "355 significant CpGs",
+    caption = "") +theme(text=element_text(size=8, family="ArialMT"))
+
+#dev.copy(pdf,paste0("MeanDiff_CtrlD0D6.pdf"),height = 7, width = 7, paper='special')
+#dev.off()
+dev.copy(cairo_pdf,paste0("MeanDiff_D7_P100ctrl.pdf"),height = 7, width = 6, fallback_resolution = 200)
+dev.off()
+
+
+#Plot modified Manhattan plot
+d7_p100vsCtrlmeandiff$chr = factor(d7_p100vsCtrlmeandiff$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+increase=subset(d7_p100vsCtrlmeandiff, mean.diff > 0 & adj.P.Val < 0.05)
+increase$chr = factor(increase$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+decrease=subset(d7_p100vsCtrlmeandiff, mean.diff < 0 & adj.P.Val < 0.05)
+decrease$chr = factor(decrease$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+ggplot(d7_p100vsCtrlmeandiff, aes(factor(pos), mean.diff))+
+  geom_point(size=0.5, alpha=0.5) +
+    geom_point(data=increase, aes(factor(pos), mean.diff), color="green", size=0.5, alpha = 0.5) +
+    geom_point(data=decrease, aes(factor(pos), mean.diff), color="red", size=0.5, alpha = 0.5) +
+    facet_grid(~ chr, scales="free", space="free")+
+    labs(title = "Day 7 P100 vs control") +
+    xlab("") + 
+    ylab("Mean difference in beta values") +
+    ylim(-1,1)+theme(axis.ticks = element_blank(),axis.text.x = element_blank())
+dev.copy(cairo_pdf,paste0("Manhatten_D7_P100ctrl.pdf"),height = 6, width = 8, fallback_resolution = 200)
+dev.off()
+
+
+```
+
+```{r Mean difference in BETAS D7-P200 vs ctrl}
+
+#Differences on day 7:
+#Day 7 p200 vs ctrl 
+d7_p200vsCtrlmeandiff = d7_p200_ctrl_avg.betas %>% mutate(mean.diff =  d7_p200-  d7ctrl) 
+
+#identical(rownames(t_b_6), rownames(d0_d6meandiff)) #False
+#Change order of mean.diff to equal to t_b_6
+d7_p200vsCtrlmeandiff = d7_p200vsCtrlmeandiff[order(match(rownames(d7_p200vsCtrlmeandiff), t_d7_p200_ctrl$Name)), , drop = FALSE]
+identical(rownames(t_d7_p200_ctrl), rownames(d7_p200vsCtrlmeandiff))#True
+
+d7_p200vsCtrlmeandiff = cbind(t_d7_p200_ctrl, d7_p200vsCtrlmeandiff)#Merge med annotert resultat av DE
+d7_p200vsCtrlmeandiff = merge(d7_p200vsCtrlmeandiff, uniqueGenes, by = "cgid", all.x = T, all.y = F) #Merge with Uniquegenes
+d7_p200vsCtrlmeandiff = d7_p200vsCtrlmeandiff[order(d7_p200vsCtrlmeandiff$P.Value),]#Order by P.value
+
+keyvals.colour <- ifelse(
+    d7_p200vsCtrlmeandiff$adj.P.Val >= 0.05 |  d7_p200vsCtrlmeandiff$adj.P.Val == "NA", 'grey30',
+      ifelse(d7_p200vsCtrlmeandiff$adj.P.Val < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant (p < 0.05)'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(d7_p200vsCtrlmeandiff,
+    lab = d7_p200vsCtrlmeandiff$external_gene_name,
+    selectLab = d7_p200vsCtrlmeandiff$external_gene_name[1:100],
+    labSize = 5,
+    x = 'mean.diff',
+    y = 'P.Value',
+    pointSize = 0.1,
+    xlim = c(-0.3,0.3),
+    ylim = c(0, 10),
+    xlab = "Mean difference in beta values",
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    gridlines.major =F,
+    gridlines.minor = F,
+    title = "Day 7: 200 uM paracetamol vs control",
+    subtitle = "9358 significant CpGs",
+    caption = "") +theme(text=element_text(size=8, family="ArialMT"))
+
+#dev.copy(pdf,paste0("MeanDiff_CtrlD0D6.pdf"),height = 7, width = 7, paper='special')
+#dev.off()
+dev.copy(cairo_pdf,paste0("MeanDiff_D7_p200ctrl.pdf"),height = 7, width = 6, fallback_resolution = 200)
+dev.off()
+
+
+#Plot modified Manhattan plot
+d7_p200vsCtrlmeandiff$chr = factor(d7_p200vsCtrlmeandiff$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+increase=subset(d7_p200vsCtrlmeandiff, mean.diff > 0 & adj.P.Val < 0.05)
+increase$chr = factor(increase$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+decrease=subset(d7_p200vsCtrlmeandiff, mean.diff < 0 & adj.P.Val < 0.05)
+decrease$chr = factor(decrease$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+ggplot(d7_p200vsCtrlmeandiff, aes(factor(pos), mean.diff))+
+  geom_point(size=0.5, alpha=0.5) +
+    geom_point(data=increase, aes(factor(pos), mean.diff), color="green", size=0.5, alpha = 0.5) +
+    geom_point(data=decrease, aes(factor(pos), mean.diff), color="red", size=0.5, alpha = 0.5) +
+    facet_grid(~ chr, scales="free", space="free")+
+    labs(title = "Day 7 p200 vs control") +
+    xlab("") + 
+    ylab("Mean difference in beta values") +
+    ylim(-1,1)+theme(axis.ticks = element_blank(),axis.text.x = element_blank())
+dev.copy(cairo_pdf,paste0("Manhatten_D7_p200ctrl.pdf"),height = 6, width = 8, fallback_resolution = 200)
+dev.off()
+```
+
+
+```{r Mean difference in BETAS D7-P200 vs P100}
+
+#Differences on day 7:
+#Day 7 p200 vs P100 
+d7_p200vsp100meandiff = d7_p200_p100_avg.betas %>% mutate(mean.diff =  d7_p200- d7_p100) 
+
+#identical(rownames(t_b_6), rownames(d0_d6meandiff)) #False
+#Change order of mean.diff to equal to t_b_6
+d7_p200vsp100meandiff = d7_p200vsp100meandiff[order(match(rownames(d7_p200vsp100meandiff), t_d7_p200_p100$Name)), , drop = FALSE]
+identical(rownames(t_d7_p200_p100), rownames(d7_p200vsp100meandiff))#True
+
+d7_p200vsp100meandiff = cbind(t_d7_p200_p100, d7_p200vsp100meandiff)#Merge med annotert resultat av DE
+d7_p200vsp100meandiff = merge(d7_p200vsp100meandiff, uniqueGenes, by = "cgid", all.x = T, all.y = F) #Merge with Uniquegenes
+d7_p200vsp100meandiff = d7_p200vsp100meandiff[order(d7_p200vsp100meandiff$P.Value),]#Order by P.value
+
+keyvals.colour <- ifelse(
+    d7_p200vsp100meandiff$adj.P.Val >= 0.05 |  d7_p200vsp100meandiff$adj.P.Val == "NA", 'grey30',
+      ifelse(d7_p200vsp100meandiff$adj.P.Val < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant (p < 0.05)'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(d7_p200vsp100meandiff,
+    lab = d7_p200vsp100meandiff$external_gene_name,
+    selectLab = d7_p200vsp100meandiff$external_gene_name[1:10],
+    labSize = 5,
+    x = 'mean.diff',
+    y = 'P.Value',
+    pointSize = 0.1,
+    xlim = c(-0.3,0.3),
+    ylim = c(0, 10),
+    xlab = "Mean difference in beta values",
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    gridlines.major =F,
+    gridlines.minor = F,
+    title = "Day 7: 200 vs 100 uM paracetamol",
+    subtitle = "0 significant CpGs",
+    caption = "") +theme(text=element_text(size=8, family="ArialMT"))
+
+#dev.copy(pdf,paste0("MeanDiff_CtrlD0D6.pdf"),height = 7, width = 7, paper='special')
+#dev.off()
+dev.copy(cairo_pdf,paste0("MeanDiff_D7_p200P100.pdf"),height = 7, width = 6, fallback_resolution = 200)
+dev.off()
+
+
+#Plot modified Manhattan plot
+d7_p200vsp100meandiff$chr = factor(d7_p200vsp100meandiff$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+increase=subset(d7_p200vsp100meandiff, mean.diff > 0 & adj.P.Val < 0.05)
+increase$chr = factor(increase$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+decrease=subset(d7_p200vsp100meandiff, mean.diff < 0 & adj.P.Val < 0.05)
+decrease$chr = factor(decrease$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+ggplot(d7_p200vsp100meandiff, aes(factor(pos), mean.diff))+
+  geom_point(size=0.5, alpha=0.5) +
+    geom_point(data=increase, aes(factor(pos), mean.diff), color="green", size=0.5, alpha = 0.5) +
+    geom_point(data=decrease, aes(factor(pos), mean.diff), color="red", size=0.5, alpha = 0.5) +
+    facet_grid(~ chr, scales="free", space="free")+
+    labs(title = "Day 7 p200 vs control") +
+    xlab("") + 
+    ylab("Mean difference in beta values") +
+    ylim(-1,1)+theme(axis.ticks = element_blank(),axis.text.x = element_blank())
+dev.copy(cairo_pdf,paste0("Manhatten_D7_p200P100.pdf"),height = 6, width = 8, fallback_resolution = 200)
+dev.off()
+```
+
+
+```{r Mean difference in BETAS D20-P100 vs ctrl}
+
+#Differences on day 20:
+#Day 20 p100 vs ctrl 
+d20_p100vsCtrlmeandiff = d20_p100_ctrl_avg.betas %>% mutate(mean.diff =  d20_p100-  d20_ctrl) 
+
+#identical(rownames(t_b_6), rownames(d0_d6meandiff)) #False
+#Change order of mean.diff to equal to t_b_6
+d20_p100vsCtrlmeandiff = d20_p100vsCtrlmeandiff[order(match(rownames(d20_p100vsCtrlmeandiff), t_d20_p100_ctrl$Name)), , drop = FALSE]
+identical(rownames(t_d20_p100_ctrl), rownames(d20_p100vsCtrlmeandiff))#True
+
+d20_p100vsCtrlmeandiff = cbind(t_d20_p100_ctrl, d20_p100vsCtrlmeandiff)#Merge med annotert resultat av DE
+d20_p100vsCtrlmeandiff = merge(d20_p100vsCtrlmeandiff, uniqueGenes, by = "cgid", all.x = T, all.y = F) #Merge with Uniquegenes
+d20_p100vsCtrlmeandiff = d20_p100vsCtrlmeandiff[order(d20_p100vsCtrlmeandiff$P.Value),]#Order by P.value
+
+keyvals.colour <- ifelse(
+    d20_p100vsCtrlmeandiff$adj.P.Val >= 0.05 |  d20_p100vsCtrlmeandiff$adj.P.Val == "NA", 'grey30',
+      ifelse(d20_p100vsCtrlmeandiff$adj.P.Val < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant (p < 0.05)'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(d20_p100vsCtrlmeandiff,
+    lab = d20_p100vsCtrlmeandiff$external_gene_name,
+    selectLab = d20_p100vsCtrlmeandiff$external_gene_name[1:100],
+    labSize = 5,
+    x = 'mean.diff',
+    y = 'P.Value',
+    pointSize = 0.1,
+    xlim = c(-0.4,0.4),
+    ylim = c(0, 12),
+    xlab = "Mean difference in beta values",
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    gridlines.major =F,
+    gridlines.minor = F,
+    title = "Day 20: 100 uM paracetamol vs control",
+    subtitle = "20218 significant CpGs",
+    caption = "") +theme(text=element_text(size=8, family="ArialMT"))
+
+#dev.copy(pdf,paste0("MeanDiff_CtrlD0D6.pdf"),height = 7, width = 7, paper='special')
+#dev.off()
+dev.copy(cairo_pdf,paste0("MeanDiff_d20_P100ctrl.pdf"),height = 7, width = 6, fallback_resolution = 200)
+dev.off()
+
+
+#Plot modified Manhattan plot
+d20_p100vsCtrlmeandiff$chr = factor(d20_p100vsCtrlmeandiff$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+increase=subset(d20_p100vsCtrlmeandiff, mean.diff > 0 & adj.P.Val < 0.05)
+increase$chr = factor(increase$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+decrease=subset(d20_p100vsCtrlmeandiff, mean.diff < 0 & adj.P.Val < 0.05)
+decrease$chr = factor(decrease$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+ggplot(d20_p100vsCtrlmeandiff, aes(factor(pos), mean.diff))+
+  geom_point(size=0.5, alpha=0.5) +
+    geom_point(data=increase, aes(factor(pos), mean.diff), color="green", size=0.5, alpha = 0.5) +
+    geom_point(data=decrease, aes(factor(pos), mean.diff), color="red", size=0.5, alpha = 0.5) +
+    facet_grid(~ chr, scales="free", space="free")+
+    labs(title = "Day 20 P100 vs control") +
+    xlab("") + 
+    ylab("Mean difference in beta values") +
+    ylim(-1,1)+theme(axis.ticks = element_blank(),axis.text.x = element_blank())
+dev.copy(cairo_pdf,paste0("Manhatten_d20_P100ctrl.pdf"),height = 6, width = 8, fallback_resolution = 200)
+dev.off()
+
+```
+
+
+```{r Mean difference in BETAS D20-P200 vs ctrl}
+
+#Differences on day 20:
+#Day 20 p200 vs ctrl 
+
+d20_p200vsCtrlmeandiff = d20_p200_ctrl_avg.betas %>% mutate(mean.diff =  d20_p200-  d20_ctrl) 
+
+#identical(rownames(t_b_6), rownames(d0_d6meandiff)) #False
+#Change order of mean.diff to equal to t_b_6
+d20_p200vsCtrlmeandiff = d20_p200vsCtrlmeandiff[order(match(rownames(d20_p200vsCtrlmeandiff), t_d20_p200_ctrl$Name)), , drop = FALSE]
+identical(rownames(t_d20_p200_ctrl), rownames(d20_p200vsCtrlmeandiff))#True
+
+d20_p200vsCtrlmeandiff = cbind(t_d20_p200_ctrl, d20_p200vsCtrlmeandiff)#Merge med annotert resultat av DE
+d20_p200vsCtrlmeandiff = merge(d20_p200vsCtrlmeandiff, uniqueGenes, by = "cgid", all.x = T, all.y = F) #Merge with Uniquegenes
+d20_p200vsCtrlmeandiff = d20_p200vsCtrlmeandiff[order(d20_p200vsCtrlmeandiff$P.Value),]#Order by P.value
+
+keyvals.colour <- ifelse(
+    d20_p200vsCtrlmeandiff$adj.P.Val >= 0.05 |  d20_p200vsCtrlmeandiff$adj.P.Val == "NA", 'grey30',
+      ifelse(d20_p200vsCtrlmeandiff$adj.P.Val < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant (p < 0.05)'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(d20_p200vsCtrlmeandiff,
+    lab = d20_p200vsCtrlmeandiff$external_gene_name,
+    selectLab = d20_p200vsCtrlmeandiff$external_gene_name[1:100],
+    labSize = 5,
+    x = 'mean.diff',
+    y = 'P.Value',
+    pointSize = 0.1,
+    xlim = c(-0.6,0.6),
+    ylim = c(0, 15.5),
+    xlab = "Mean difference in beta values",
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    gridlines.major =F,
+    gridlines.minor = F,
+    title = "Day 20: 200 uM paracetamol vs control",
+    subtitle = "56639 significant CpGs",
+    caption = "") +theme(text=element_text(size=8, family="ArialMT"))
+
+#dev.copy(pdf,paste0("MeanDiff_CtrlD0D6.pdf"),height = 7, width = 7, paper='special')
+#dev.off()
+dev.copy(cairo_pdf,paste0("MeanDiff_d20_p200ctrl.pdf"),height = 7, width = 6, fallback_resolution = 200)
+dev.off()
+
+
+#Plot modified Manhattan plot
+d20_p200vsCtrlmeandiff$chr = factor(d20_p200vsCtrlmeandiff$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+increase=subset(d20_p200vsCtrlmeandiff, mean.diff > 0 & adj.P.Val < 0.05)
+increase$chr = factor(increase$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+decrease=subset(d20_p200vsCtrlmeandiff, mean.diff < 0 & adj.P.Val < 0.05)
+decrease$chr = factor(decrease$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+ggplot(d20_p200vsCtrlmeandiff, aes(factor(pos), mean.diff))+
+  geom_point(size=0.5, alpha=0.5) +
+    geom_point(data=increase, aes(factor(pos), mean.diff), color="green", size=0.5, alpha = 0.5) +
+    geom_point(data=decrease, aes(factor(pos), mean.diff), color="red", size=0.5, alpha = 0.5) +
+    facet_grid(~ chr, scales="free", space="free")+
+    labs(title = "Day 20 p200 vs control") +
+    xlab("") + 
+    ylab("Mean difference in beta values") +
+    ylim(-1,1)+theme(axis.ticks = element_blank(),axis.text.x = element_blank())
+dev.copy(cairo_pdf,paste0("Manhatten_d20_p200ctrl.pdf"),height = 6, width = 8, fallback_resolution = 200)
+dev.off()
+```
+
+
+```{r Mean difference in BETAS D20-P200 vs P100}
+
+#Differences on day 20:
+#Day 20 p200 vs P100 
+d20_p200vsp100meandiff = d20_p200_p100_avg.betas %>% mutate(mean.diff =  d20_p200- d20_p100) 
+
+#identical(rownames(t_b_6), rownames(d0_d6meandiff)) #False
+#Change order of mean.diff to equal to t_b_6
+d20_p200vsp100meandiff = d20_p200vsp100meandiff[order(match(rownames(d20_p200vsp100meandiff), t_d20_p200_p100$Name)), , drop = FALSE]
+identical(rownames(t_d20_p200_p100), rownames(d20_p200vsp100meandiff))#True
+
+d20_p200vsp100meandiff = cbind(t_d20_p200_p100, d20_p200vsp100meandiff)#Merge med annotert resultat av DE
+d20_p200vsp100meandiff = merge(d20_p200vsp100meandiff, uniqueGenes, by = "cgid", all.x = T, all.y = F) #Merge with Uniquegenes
+d20_p200vsp100meandiff = d20_p200vsp100meandiff[order(d20_p200vsp100meandiff$P.Value),]#Order by P.value
+
+keyvals.colour <- ifelse(
+    d20_p200vsp100meandiff$adj.P.Val >= 0.05 |  d20_p200vsp100meandiff$adj.P.Val == "NA", 'grey30',
+      ifelse(d20_p200vsp100meandiff$adj.P.Val < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant (p < 0.05)'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(d20_p200vsp100meandiff,
+    lab = d20_p200vsp100meandiff$external_gene_name,
+    selectLab = d20_p200vsp100meandiff$external_gene_name[1:100],
+    labSize = 5,
+    x = 'mean.diff',
+    y = 'P.Value',
+    pointSize = 0.1,
+    xlim = c(-0.55,0.55),
+    ylim = c(0, 16),
+    xlab = "Mean difference in beta values",
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    gridlines.major =F,
+    gridlines.minor = F,
+    title = "Day 20: 200 vs 100 uM paracetamol",
+    subtitle = "8940 significant CpGs",
+    caption = "") +theme(text=element_text(size=8, family="ArialMT"))
+
+dev.copy(cairo_pdf,paste0("MeanDiff_d20_p200P100.pdf"),height = 7, width = 6, fallback_resolution = 200)
+dev.off()
+
+
+#Plot modified Manhattan plot
+d20_p200vsp100meandiff$chr = factor(d20_p200vsp100meandiff$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+increase=subset(d20_p200vsp100meandiff, mean.diff > 0 & adj.P.Val < 0.05)
+increase$chr = factor(increase$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+decrease=subset(d20_p200vsp100meandiff, mean.diff < 0 & adj.P.Val < 0.05)
+decrease$chr = factor(decrease$chr, levels = c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+                                                     "chr12", "chr13", "chr14", "chr15", "chr16", "chr17","chr18", "chr19", "chr20", "chr21", "chr22","chrX", "chrY"))
+
+ggplot(d20_p200vsp100meandiff, aes(factor(pos), mean.diff))+
+  geom_point(size=0.5, alpha=0.5) +
+    geom_point(data=increase, aes(factor(pos), mean.diff), color="green", size=0.5, alpha = 0.5) +
+    geom_point(data=decrease, aes(factor(pos), mean.diff), color="red", size=0.5, alpha = 0.5) +
+    facet_grid(~ chr, scales="free", space="free")+
+    labs(title = "Day 20 p200 vs p100") +
+    xlab("") + 
+    ylab("Mean difference in beta values") +
+    ylim(-1,1)+theme(axis.ticks = element_blank(),axis.text.x = element_blank())
+dev.copy(cairo_pdf,paste0("Manhatten_d20_p200P100.pdf"),height = 6, width = 8, fallback_resolution = 200)
+dev.off()
+
+```
+
+## Mean difference in betavalues over time
+
+```{r Mean mean difference in BETAS (D20-P - D7 P) vs (d20 ctrl -d7 ctrl)}
+#----TRp100----------
+TR_p100meandiff = avg.betas %>% mutate(mean.diff =  (d20_p100- d7_p100)- (d20_ctrl - d7ctrl)) 
+
+#identical(rownames(t_b_6), rownames(d0_d6meandiff)) #False
+#Change order of mean.diff to equal to t_b_6
+TR_p100meandiff = TR_p100meandiff[order(match(rownames(TR_p100meandiff), t_TR_p100$Name)), , drop = FALSE]
+identical(rownames(t_d20_p200_p100), rownames(TR_p100meandiff))#True
+
+TR_p100meandiff = cbind(t_TR_p100, TR_p100meandiff)#Merge med annotert resultat av DE
+TR_p100meandiff = merge(TR_p100meandiff, uniqueGenes, by = "cgid", all.x = T, all.y = F) #Merge with Uniquegenes
+TR_p100meandiff = TR_p100meandiff[order(TR_p100meandiff$P.Value),]#Order by P.value
+
+keyvals.colour <- ifelse(
+    TR_p100meandiff$adj.P.Val >= 0.05 |  TR_p100meandiff$adj.P.Val == "NA", 'grey30',
+      ifelse(TR_p100meandiff$adj.P.Val < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant (p < 0.05)'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(TR_p100meandiff,
+    lab = TR_p100meandiff$external_gene_name,
+    selectLab = TR_p100meandiff$external_gene_name[1:5],
+    labSize = 2,
+    x = 'mean.diff',
+    y = 'P.Value',
+    pointSize = 0.1,
+    xlim = c(-0.5,0.5),
+    ylim = c(0, 10),
+    xlab = "Mean difference in beta values",
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    gridlines.major =F,
+    gridlines.minor = F,
+    title = "Time response: 100 uM paracetamol",
+    subtitle = "0 significant CpGs",
+    caption = "") +theme(text=element_text(size=8, family="ArialMT"))
+dev.copy(cairo_pdf,paste0("MeanDiff_TRp100.pdf"),height = 7, width = 6, fallback_resolution = 200)
+dev.off()
+
+#----TRp200--------
+TR_p200meandiff = avg.betas %>% mutate(mean.diff =  (d20_p200- d7_p200)- (d20_ctrl - d7ctrl)) 
+
+#identical(rownames(t_b_6), rownames(d0_d6meandiff)) #False
+#Change order of mean.diff to equal to t_b_6
+TR_p200meandiff = TR_p200meandiff[order(match(rownames(TR_p200meandiff), t_TR_p200$Name)), , drop = FALSE]
+identical(rownames(t_TR_p200), rownames(TR_p200meandiff))#True
+
+TR_p200meandiff = cbind(t_TR_p200, TR_p200meandiff)#Merge med annotert resultat av DE
+TR_p200meandiff = merge(TR_p200meandiff, uniqueGenes, by = "cgid", all.x = T, all.y = F) #Merge with Uniquegenes
+TR_p200meandiff = TR_p200meandiff[order(TR_p200meandiff$P.Value),]#Order by P.value
+
+keyvals.colour <- ifelse(
+    TR_p200meandiff$adj.P.Val >= 0.05 |  TR_p200meandiff$adj.P.Val == "NA", 'grey30',
+      ifelse(TR_p200meandiff$adj.P.Val < 0.05, 'red2',
+        'grey30'))
+  keyvals.colour[is.na(keyvals.colour)] <- 'grey30'
+  names(keyvals.colour)[keyvals.colour == 'red2'] <- 'Significant (p < 0.05)'
+  names(keyvals.colour)[keyvals.colour == 'black'] <- '?'
+  names(keyvals.colour)[keyvals.colour == 'grey30'] <- 'Not significant'
+
+EnhancedVolcano(TR_p200meandiff,
+    lab = TR_p200meandiff$external_gene_name,
+    selectLab = TR_p200meandiff$external_gene_name[1:100],
+    labSize = 2,
+    x = 'mean.diff',
+    y = 'P.Value',
+    pointSize = 0.1,
+    xlim = c(-0.62,0.62),
+    ylim = c(0, 12),
+    xlab = "Mean difference in beta values",
+    cutoffLineType = "blank",
+    colCustom = keyvals.colour,
+    gridlines.major =F,
+    gridlines.minor = F,
+    title = "Time response: 200 uM paracetamol",
+    subtitle = "3113 significant CpGs",
+    caption = "") +theme(text=element_text(size=8, family="ArialMT"))
+dev.copy(cairo_pdf,paste0("MeanDiff_TRp200.pdf"),height = 7, width = 6, fallback_resolution = 200)
+dev.off()
+
+```
+
+#Venn diagrams
+```{r Venndiagrams}
+
+##VennDay7 paracetamol -----
+D7_100_0.cpgs = t_d7_p100_ctrl[!is.na(t_d7_p100_ctrl$adj.P.Val),]
+D7_100_0.cpgs = row.names(D7_100_0.cpgs[D7_100_0.cpgs$adj.P.Val <0.05,])
+  
+D7_200_0.cpgs = t_d7_p200_ctrl[!is.na(t_d7_p200_ctrl$adj.P.Val),]
+D7_200_0.cpgs = row.names(D7_200_0.cpgs[D7_200_0.cpgs$adj.P.Val <0.05,])
+
+D7_100_200.cpgs = t_d7_p200_p100[!is.na(t_d7_p200_p100$adj.P.Val),]
+D7_100_200.cpgs = row.names(D7_100_200.cpgs[D7_100_200.cpgs$adj.P.Val <0.05,])
+
+
+# Calculate the intersection of the three sets
+cpg.venn <- list('1' = length(D7_100_0.cpgs),
+                 '2' = length(D7_200_0.cpgs),
+                 "3" = length(D7_100_200.cpgs),
+                 'n12' = length(intersect(D7_100_0.cpgs,D7_200_0.cpgs)),
+                 'n23' = length(intersect(D7_200_0.cpgs, D7_100_200.cpgs)),
+                 'n13' = length(intersect(D7_100_0.cpgs, D7_100_200.cpgs)),
+                 "n123" = length(intersect(intersect(D7_100_0.cpgs,D7_200_0.cpgs),D7_100_200.cpgs)))
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.triple.venn(area1 = cpg.venn$`1`, area2 = cpg.venn$`2`, 
+                              area3 = cpg.venn$`3`,
+                              n12 = cpg.venn$n12, 
+                              n13 = cpg.venn$n13, 
+                              n23 = cpg.venn$n23, 
+                              n123 = cpg.venn$n123, 
+                              category = c("Control vs P100", "Control vs P200", "P100 vs P200"), 
+                              euler.d =T,
+                              scaled = T,
+                              fill = c( "#F28E2B", "#B60A1C", "#8A494D" ), alpha = rep(0.5, 3),
+                              cat.pos = c(0, 0, 180))
+
+ # Actually plot the plot
+grid.draw(venn.plot)
+
+pdf("VennDay7_paracetamol.pdf", width = 5, height=5)
+grid.draw(venn.plot)
+dev.off()
+
+##VennDay20 paracetamol -----
+D20_100_0.cpgs = t_d20_p100_ctrl[!is.na(t_d20_p100_ctrl$adj.P.Val),]
+D20_100_0.cpgs = row.names(D20_100_0.cpgs[D20_100_0.cpgs$adj.P.Val <0.05,])
+  
+D20_200_0.cpgs = t_d20_p200_ctrl[!is.na(t_d20_p200_ctrl$adj.P.Val),]
+D20_200_0.cpgs = row.names(D20_200_0.cpgs[D20_200_0.cpgs$adj.P.Val <0.05,])
+
+D20_100_200.cpgs = t_d20_p200_p100[!is.na(t_d20_p200_p100$adj.P.Val),]
+D20_100_200.cpgs = row.names(D20_100_200.cpgs[D20_100_200.cpgs$adj.P.Val <0.05,])
+
+
+# Calculate the intersection of the three sets
+cpg.venn <- list('1' = length(D20_100_0.cpgs),
+                 '2' = length(D20_200_0.cpgs),
+                 "3" = length(D20_100_200.cpgs),
+                 'n12' = length(intersect(D20_100_0.cpgs,D20_200_0.cpgs)),
+                 'n23' = length(intersect(D20_200_0.cpgs, D20_100_200.cpgs)),
+                 'n13' = length(intersect(D20_100_0.cpgs, D20_100_200.cpgs)),
+                 "n123" = length(intersect(intersect(D20_100_0.cpgs,D20_200_0.cpgs),D20_100_200.cpgs)))
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.triple.venn(area1 = cpg.venn$`1`, area2 = cpg.venn$`2`, 
+                              area3 = cpg.venn$`3`,
+                              n12 = cpg.venn$n12, 
+                              n13 = cpg.venn$n13, 
+                              n23 = cpg.venn$n23, 
+                              n123 = cpg.venn$n123, 
+                              category = c("Control vs P100", "Control vs P200", "P100 vs P200"), 
+                              euler.d =T,
+                              scaled = T,
+                              fill = c( "#F28E2B", "#B60A1C", "#8A494D" ), alpha = rep(0.5, 3),
+                              cat.pos = c(0, 0, 180))
+
+ # Actually plot the plot
+grid.draw(venn.plot)
+
+pdf("VennDay20_paracetamol.pdf", width = 5, height=5)
+grid.draw(venn.plot)
+dev.off()
+
+#Concentration 100 vs 0 across days ------------------
+# Calculate the intersection of the three sets
+cpg.venn <- list('1' = length(D7_100_0.cpgs),
+                 '2' = length(D20_100_0.cpgs),
+                 'n12' = length(intersect(D7_100_0.cpgs, D20_100_0.cpgs)))
+               
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.pairwise.venn(area1 = cpg.venn$`1`, 
+                              area2 = cpg.venn$`2`, 
+                              cross.area = cpg.venn$n12, 
+                              category = c("Day 7: P100", "Day 20: P100"), 
+                              euler.d =F,
+                              scaled = F,
+                              fill = c("#B60A1C", "#8A494D" ), alpha = rep(0.5, 2),
+                              cat.pos = c(0, 0), rotation.degree = 180)
+# Actually plot the plot
+grid.draw(venn.plot)
+
+pdf("VennP100.pdf", width = 5, height=5)
+grid.draw(venn.plot)
+dev.off()
+
+#Concentration 200 vs 0 across days ------------------
+# Calculate the intersection of the three sets
+cpg.venn <- list('n1' = length(D7_200_0.cpgs),
+                 'n2' = length(D20_200_0.cpgs),
+                 'n12' = length(intersect(D7_200_0.cpgs, D20_200_0.cpgs)))
+               
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.pairwise.venn(area1 = cpg.venn$n1, 
+                              area2 = cpg.venn$n2, 
+                              cross.area = cpg.venn$n12, 
+                              category = c("Day 7: P200", "Day 20: P200"), 
+                              euler.d =F,
+                              scaled = F,
+                              fill = c("#B60A1C", "#8A494D" ), alpha = rep(0.5, 2),
+                              cat.pos = c(0, 0), rotation.degree = 180)
+# Actually plot the plot
+grid.draw(venn.plot)
+
+pdf("VennP200.pdf", width = 5, height=5)
+grid.draw(venn.plot)
+dev.off()
+
+#Concentration 200 vs 100 across days ------------------
+# Calculate the intersection of the three sets
+cpg.venn <- list('n1' = length(D7_100_200.cpgs),
+                 'n2' = length(D20_100_200.cpgs),
+                 'n12' = length(intersect(D20_100_200.cpgs, D7_100_200.cpgs)))
+               
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.pairwise.venn(area1 = cpg.venn$n1, 
+                              area2 = cpg.venn$n2, 
+                              cross.area = cpg.venn$n12, 
+                              category = c("Day 7: P100 vs P200", "Day 20: P100 vs P200"), 
+                              euler.d =F,
+                              scaled = F,
+                              fill = c("#B60A1C", "#8A494D" ), alpha = rep(0.5, 2),
+                              cat.pos = c(0, 0), rotation.degree = 180)
+# Actually plot the plot
+grid.draw(venn.plot)
+
+pdf("VennP100P200.pdf", width = 5, height=5)
+grid.draw(venn.plot)
+dev.off()
+
+#Time response ------------------
+TR_p100.cpgs = t_TR_p100[!is.na(t_TR_p100$adj.P.Val),]
+TR_p100.cpgs = row.names(TR_p100.cpgs[TR_p100.cpgs$adj.P.Val <0.05,])
+
+TR_p200.cpgs = t_TR_p200[!is.na(t_TR_p200$adj.P.Val),]
+TR_p200.cpgs = row.names(TR_p200.cpgs[TR_p200.cpgs$adj.P.Val <0.05,])
+
+cpg.venn <- list('n1' = length(TR_p100.cpgs),
+                 'n2' = length(TR_p200.cpgs),
+                 'n12' = length(intersect(TR_p100.cpgs, TR_p200.cpgs)))
+               
+
+# Arguments for a pairwise (two-sets) venn-diagram are sizes for set1, set2 and overlap (intersect)
+# Many more functions are available for triple, quad and quantuple diagrams (starting with 'draw.***')
+venn.plot <- draw.pairwise.venn(area1 = cpg.venn$n1, 
+                              area2 = cpg.venn$n2, 
+                              cross.area = cpg.venn$n12, 
+                              category = c("Time response: P100", "Time response: P200"), 
+                              euler.d =F,
+                              scaled = F,
+                              fill = c("#B60A1C", "#8A494D" ), alpha = rep(0.5, 2),
+                              cat.pos = c(0, 0), rotation.degree = 180)
+# Actually plot the plot
+grid.draw(venn.plot)
+
+pdf("VennTR.pdf", width = 5, height=5)
+grid.draw(venn.plot)
+dev.off()
+```
+
+# GO analysis
+
+
+## Day 7
+
+```{r day 7 P100 vs ctrl GSEA, eval=FALSE, include=FALSE}
+#Standard ranked GSEA
+met_P100_ctrl_D7 = subset(t_d7_p100_ctrl, select = c("P.Value", "logFC"))
+UP_met_P100_ctrl_D7 = met_P100_ctrl_D7[met_P100_ctrl_D7$logFC>=0, ]
+UP_met_P100_ctrl_D7 = setNames(UP_met_P100_ctrl_D7$P.Value, rownames(UP_met_P100_ctrl_D7)) 
+
+DOWN_met_P100_ctrl_D7 = met_P100_ctrl_D7[met_P100_ctrl_D7$logFC<=0, ]
+DOWN_met_P100_ctrl_D7 = setNames(DOWN_met_P100_ctrl_D7$P.Value, rownames(DOWN_met_P100_ctrl_D7))
+
+#met_P100_ctrl_D7 = setNames(met_P100_ctrl_D7$P.Value, rownames(met_P100_ctrl_D7)) 
+
+#MethylRRA
+currentjob = "MethylRRA_GSEA"
+
+#UP
+#Functional class scoring
+GSEARRA_P100_ctrl_D7_UP = methylRRA(cpg.pval = UP_met_P100_ctrl_D7, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+#head(GSEARRA_P100_ctrl_D7, 20)
+
+GSEARRA_P100_ctrl_D7_UP$NES = as.numeric(GSEARRA_P100_ctrl_D7_UP$NES)
+GSEARRA_P100_ctrl_D7_UPb = GSEARRA_P100_ctrl_D7_UP %>% dplyr::filter(padj< 0.05) %>% arrange(desc(abs(NES)))
+GSEARRA_P100_ctrl_D7_UP[GSEARRA_P100_ctrl_D7_UP$NES <0,]#No downregulated pathways
+write.csv(GSEARRA_P100_ctrl_D7_UPb, file="GSEARRA_P100_ctrl_D7_UP.csv")
+
+ggplot(GSEARRA_P100_ctrl_D7_UPb[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,600), breaks = c(50, 100,200, 300, 400, 500, 600))+
+  labs(title = "Day 7: P100 vs control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D7.P100vsCtrl_UP.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(GSEARRA_P100_ctrl_D7_UPb[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(-11,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA day 7: P100 vs ctrl",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_D7.P100vsCtrl_dotplot_UP.pdf"),height = 5, width = 9, paper='special')
+dev.off() 
+
+#DOWN
+#Functional class scoring
+GSEARRA_P100_ctrl_D7_DOWN = methylRRA(cpg.pval = DOWN_met_P100_ctrl_D7, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+#head(GSEARRA_P100_ctrl_D7, 20)
+
+GSEARRA_P100_ctrl_D7_DOWN$NES = as.numeric(GSEARRA_P100_ctrl_D7_DOWN$NES)
+GSEARRA_P100_ctrl_D7_DOWNb = GSEARRA_P100_ctrl_D7_DOWN %>% dplyr::filter(padj< 0.05) %>% arrange(desc(abs(NES)))
+GSEARRA_P100_ctrl_D7_DOWN[GSEARRA_P100_ctrl_D7_DOWN$NES <0,]#No downregulated pathways
+write.csv(GSEARRA_P100_ctrl_D7_DOWNb, file="GSEARRA_P100_ctrl_D7_DOWN.csv")
+
+ggplot(GSEARRA_P100_ctrl_D7_DOWNb[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,600), breaks = c(50, 100,200, 300, 400, 500, 600))+
+  labs(title = "Day 7: P100 vs control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D7.P100vsCtrl_DOWN.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(GSEARRA_P100_ctrl_D7_DOWNb[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(-11,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA day 7: P100 vs ctrl",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_D7.P100vsCtrl_dotplot_DOWN.pdf"),height = 5, width = 9, paper='special')
+dev.off() 
+
+```
+
+
+```{r Day 7 P200 vs ctrl GSEA, eval=FALSE, include=FALSE}
+#Standard ranked GSEA
+met_P200_ctrl_D7 = subset(t_d7_p200_ctrl, select = c("P.Value","logFC"))
+#met_P200_ctrl_D7 = setNames(met_P200_ctrl_D7$P.Value,rownames(met_P200_ctrl_D7))
+UP_met_P200_ctrl_D7 = met_P200_ctrl_D7[met_P200_ctrl_D7$logFC>=0, ]
+UP_met_P200_ctrl_D7 = setNames(UP_met_P200_ctrl_D7$P.Value, rownames(UP_met_P200_ctrl_D7)) 
+
+DOWN_met_P200_ctrl_D7 = met_P200_ctrl_D7[met_P200_ctrl_D7$logFC<=0, ]
+DOWN_met_P200_ctrl_D7 = setNames(DOWN_met_P200_ctrl_D7$P.Value, rownames(DOWN_met_P200_ctrl_D7))
+
+#MethylRRA
+currentjob = "MethylRRA_GSEA"
+#Functional class scoring
+UP_GSEARRA_P200_ctrl_D7 = methylRRA(cpg.pval = UP_met_P200_ctrl_D7, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+#head(GSEARRA_P100_ctrl_D7, 20)
+
+UP_GSEARRA_P200_ctrl_D7$NES = as.numeric(UP_GSEARRA_P200_ctrl_D7$NES)
+UP_GSEARRA_P200_ctrl_D7b = UP_GSEARRA_P200_ctrl_D7 %>% dplyr::filter(padj< 0.001) %>% arrange(desc(abs(NES)))
+UP_GSEARRA_P200_ctrl_D7[UP_GSEARRA_P200_ctrl_D7$NES <0,]
+write.csv(UP_GSEARRA_P200_ctrl_D7b, file="UP_GSEARRA_P200_ctrl_D7.csv")
+
+ggplot(UP_GSEARRA_P200_ctrl_D7b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,600), breaks = c(50, 100, 200, 300, 400, 500, 600))+
+  labs(title = "Day 7: P200 vs control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D7.P200vsCtrl_UP.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(UP_GSEARRA_P200_ctrl_D7b[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(-11,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA day 7: P200 vs ctrl",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_D7.P200vsCtrl_dotplot_UP.pdf"),height = 5, width = 7, paper='special')
+dev.off() 
+
+DOWN_GSEARRA_P200_ctrl_D7 = methylRRA(cpg.pval = DOWN_met_P200_ctrl_D7, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+#head(GSEARRA_P100_ctrl_D7, 20)
+
+DOWN_GSEARRA_P200_ctrl_D7$NES = as.numeric(DOWN_GSEARRA_P200_ctrl_D7$NES)
+DOWN_GSEARRA_P200_ctrl_D7b = DOWN_GSEARRA_P200_ctrl_D7 %>% dplyr::filter(padj< 0.001) %>% arrange(desc(pvalue))  #arrange(desc(abs(NES)))
+DOWN_GSEARRA_P200_ctrl_D7[DOWN_GSEARRA_P200_ctrl_D7$NES <0,]
+write.csv(DOWN_GSEARRA_P200_ctrl_D7b, file="DOWN_GSEARRA_P200_ctrl_D7.csv")
+
+ggplot(DOWN_GSEARRA_P200_ctrl_D7b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,600), breaks = c(50, 100, 200, 300, 400, 500, 600))+
+  labs(title = "Day 7: P200 vs control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D7.P200vsCtrl_DOWN.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(DOWN_GSEARRA_P200_ctrl_D7b[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(-11,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA day 7: P200 vs ctrl",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_D7.P200vsCtrl_dotplot_DOWN.pdf"),height = 5, width = 7, paper='special')
+dev.off() 
+```
+
+
+```{r Day 7 P200 vs P100, eval=FALSE, include=FALSE}
+#Standard ranked GSEA
+met_P200_P100_D7 = subset(t_d7_p200_p100, select = c("P.Value","logFC"))
+#met_P200_P100_D7 = setNames(met_P200_P100_D7$P.Value,rownames(met_P200_P100_D7))
+
+UP_met_P200_P100_D7 = met_P200_P100_D7[met_P200_P100_D7$logFC>=0, ]
+UP_met_P200_P100_D7 = setNames(UP_met_P200_P100_D7$P.Value, rownames(UP_met_P200_P100_D7)) 
+
+DOWN_met_P200_P100_D7 = met_P200_P100_D7[met_P200_P100_D7$logFC<=0, ]
+DOWN_met_P200_P100_D7 = setNames(DOWN_met_P200_P100_D7$P.Value, rownames(DOWN_met_P200_P100_D7))
+
+
+#MethylRRA
+currentjob = "MethylRRA_GSEA"
+#Functional class scoring
+UP_GSEARRA_P200_P100_D7 = methylRRA(cpg.pval = UP_met_P200_P100_D7, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+head(UP_GSEARRA_P200_P100_D7, 20)
+
+UP_GSEARRA_P200_P100_D7$NES = as.numeric(UP_GSEARRA_P200_P100_D7$NES)
+UP_GSEARRA_P200_P100_D7b = UP_GSEARRA_P200_P100_D7 %>% dplyr::filter(padj< 0.001) %>% arrange(desc(abs(NES)))
+UP_GSEARRA_P200_P100_D7[UP_GSEARRA_P200_P100_D7$NES <0,]#No downregulated pathways
+write.csv(UP_GSEARRA_P200_P100_D7b, file="UP_GSEARRA_P200_P100_D7.csv")
+
+ggplot(UP_GSEARRA_P200_P100_D7b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,1000), breaks = c(50, 200,400, 600, 800, 1000))+
+  labs(title = "Day 7: P200 vs P100", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_UP_D7.P200vsP100.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(UP_GSEARRA_P200_P100_D7b[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(-14.5,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA day 7: P200 vs P100",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_UP_D7.P200vsP100_dotplot.pdf"),height = 5, width = 7, paper='special')
+dev.off() 
+
+DOWN_GSEARRA_P200_P100_D7 = methylRRA(cpg.pval = DOWN_met_P200_P100_D7, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+head(DOWN_GSEARRA_P200_P100_D7, 20)
+
+DOWN_GSEARRA_P200_P100_D7$NES = as.numeric(DOWN_GSEARRA_P200_P100_D7$NES)
+DOWN_GSEARRA_P200_P100_D7b = DOWN_GSEARRA_P200_P100_D7 %>% dplyr::filter(padj< 0.001) %>% arrange(desc(abs(NES)))
+DOWN_GSEARRA_P200_P100_D7[DOWN_GSEARRA_P200_P100_D7$NES <0,]#No downregulated pathways
+write.csv(DOWN_GSEARRA_P200_P100_D7b, file="DOWN_GSEARRA_P200_P100_D7.csv")
+
+ggplot(DOWN_GSEARRA_P200_P100_D7b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,1000), breaks = c(50, 200,400, 600, 800, 1000))+
+  labs(title = "Day 7: P200 vs P100", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_DOWN_D7.P200vsP100.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(DOWN_GSEARRA_P200_P100_D7b[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(-14.5,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA day 7: P200 vs P100",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_DOWN_D7.P200vsP100_dotplot.pdf"),height = 5, width = 7, paper='special')
+dev.off() 
+```
+
+
+## Day 20
+```{r Day 20 P100 vs ctrl GSEA}
+#Standard ranked GSEA 
+met_P100_ctrl_D20 = subset(t_d20_p100_ctrl, select = c("P.Value"))
+#met_P100_ctrl_D20 = setNames(met_P100_ctrl_D20$P.Value,rownames(met_P100_ctrl_D20))
+UP_met_P100_ctrl_D20 = met_P100_ctrl_D20[met_P100_ctrl_D20$logFC>=0, ]
+UP_met_P100_ctrl_D20 = setNames(UP_met_P100_ctrl_D20$P.Value, rownames(UP_met_P100_ctrl_D20)) 
+
+DOWN_met_P100_ctrl_D20 = met_P100_ctrl_D20[met_P100_ctrl_D20$logFC<=0, ]
+DOWN_met_P100_ctrl_D20 = setNames(DOWN_met_P100_ctrl_D20$P.Value, rownames(DOWN_met_P100_ctrl_D20))
+
+#MethylRRA
+#Functional class scoring
+UP_GSEARRA_P100_ctrl_D20 =methylRRA(cpg.pval = UP_met_P100_ctrl_D20, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+head(UP_GSEARRA_P100_ctrl_D20, 20)
+
+UP_GSEARRA_P100_ctrl_D20$NES = as.numeric(UP_GSEARRA_P100_ctrl_D20$NES)
+UP_GSEARRA_P100_ctrl_D20b = UP_GSEARRA_P100_ctrl_D20 %>% dplyr::filter(padj< 0.001) %>% arrange(desc(abs(NES)))
+UP_GSEARRA_P100_ctrl_D20[UP_GSEARRA_P100_ctrl_D20$NES <0,]
+write.csv(UP_GSEARRA_P100_ctrl_D20b, file="UP_GSEARRA_P100_ctrl_D20.csv")
+
+ggplot(UP_GSEARRA_P100_ctrl_D20b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,500), breaks = c(50, 100, 200, 300, 400, 500))+
+  labs(title = "Day 20: P100 vs control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_UP_D20.P100vsCtrl.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(UP_GSEARRA_P100_ctrl_D20b[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(0,NA)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA day 20: P100 vs control",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_UP_D20.P100vsCtrl_dotplot.pdf"),height = 5, width = 6, paper='special')
+dev.off() 
+```
+
+
+```{r Day 20 P200 vs ctrl GSEA}
+#Standard ranked GSEA 
+met_P200_ctrl_D20 = subset(t_d20_p200_ctrl, select = c("P.Value"))
+met_P200_ctrl_D20 = setNames(met_P200_ctrl_D20$P.Value, rownames((met_P200_ctrl_D20)))
+
+#MethylRRA
+#Functional class scoring
+GSEARRA_P200_ctrl_D20 =methylRRA(cpg.pval = met_P200_ctrl_D20, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+head(GSEARRA_P200_ctrl_D20, 20)
+
+GSEARRA_P200_ctrl_D20$NES = as.numeric(GSEARRA_P200_ctrl_D20$NES)
+GSEARRA_P200_ctrl_D20b = GSEARRA_P200_ctrl_D20 %>% dplyr::filter(padj< 0.001) %>% arrange(desc(abs(NES)))
+GSEARRA_P200_ctrl_D20[GSEARRA_P200_ctrl_D20$NES <0,]
+write.csv(GSEARRA_P200_ctrl_D20b, file="GSEARRA_P200_ctrl_D20.csv")
+
+ggplot(GSEARRA_P200_ctrl_D20b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,400), breaks = c(50, 100, 200, 400))+
+  labs(title = "Day 20: P200 vs control", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D20.P200vsCtrl.pdf"), width = 7, height=5, paper='special')
+dev.off()
+
+ggplot(GSEARRA_P200_ctrl_D20b[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(0,NA)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA day 20: P200 vs control",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_D20.P200vsCtrl_dotplot.pdf"),height = 5, width = 7, paper='special')
+dev.off() 
+```
+
+
+```{r Day 20 P200 vs P100 GSEA}
+#Standard ranked GSEA 
+met_P200_P100_D20 = subset(t_d20_p200_p100, select = c("P.Value"))
+met_P200_P100_D20 = setNames(met_P200_P100_D20$P.Value, rownames((met_P200_P100_D20)))
+
+#MethylRRA
+#Functional class scoring
+GSEARRA_P200_P100_D20 =methylRRA(cpg.pval = met_P200_P100_D20, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+head(GSEARRA_P200_P100_D20, 20)
+
+GSEARRA_P200_P100_D20$NES = as.numeric(GSEARRA_P200_P100_D20$NES)
+GSEARRA_P200_P100_D20b = GSEARRA_P200_P100_D20 %>% dplyr::filter(padj< 0.001) %>% arrange(desc(abs(NES)))
+GSEARRA_P200_P100_D20[GSEARRA_P200_P100_D20$NES <0,]
+write.csv(GSEARRA_P200_P100_D20b, file="GSEARRA_P200_P100_D20.csv")
+
+ggplot(GSEARRA_P200_P100_D20b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,1000), breaks = c(50, 200, 400, 600, 800, 1000))+
+  labs(title = "Day 20: P200 vs P100", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_D20.P200vsP100.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(GSEARRA_P200_P100_D20b[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(-10.2,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA day 20: P200 vs P100",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_D20.P200vsP100_dotplot.pdf"),height = 5, width = 7, paper='special')
+dev.off() 
+```
+
+## Changes over time P100
+
+```{r Changes between p100(Day 20 - Day 7) - ctrl(Day 20 - Day 7) GSEA}
+#Standard ranked GSEA 
+met_TRp100 = subset(t_TR_p100, select = c("P.Value"))
+met_TRp100 = setNames(met_TRp100$P.Value, rownames((met_TRp100)))
+
+#MethylRRA
+#Functional class scoring
+GSEARRA_TRp100 =methylRRA(cpg.pval = met_TRp100, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+head(GSEARRA_TRp100, 20)
+
+GSEARRA_TRp100$NES = as.numeric(GSEARRA_TRp100$NES)
+GSEARRA_TRp100b = GSEARRA_TRp100 %>% dplyr::filter(padj< 0.001) %>% arrange(desc(abs(NES)))
+GSEARRA_TRp100[GSEARRA_TRp100$NES <0,]
+write.csv(GSEARRA_TRp100b, file="GSEARRA_TRp100.csv")
+
+ggplot(GSEARRA_TRp100b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,1000), breaks = c(50, 200, 400, 600, 800, 1000))+
+  labs(title = "Time response: P100", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_TRp100.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(GSEARRA_TRp100b[1:20,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size),shape = 21) +
+   #xlim(c(-14,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA time response: P100",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_TRp100_dotplot.pdf"),height = 5, width = 7, paper='special')
+dev.off()
+```
+
+
+## Changes over time P200
+```{r Changes between p200(Day 20 - Day 7) - ctrl(Day 20 - Day 7) GSEA}
+currentjob = "MethylRRA_GSEA"
+
+#Standard ranked GSEA 
+met_TRp200 = subset(t_TR_p200, select = c("P.Value", "logFC"))
+#met_TRp200 = setNames(met_TRp200$P.Value, rownames((met_TRp200)))
+UP_met_TRp200 = met_TRp200[met_TRp200$logFC>=0, ]
+UP_met_TRp200 = setNames(UP_met_TRp200$P.Value, rownames(UP_met_TRp200)) 
+
+DOWN_met_TRp200 = met_TRp200[met_TRp200$logFC<=0, ]
+DOWN_met_TRp200 = setNames(DOWN_met_TRp200$P.Value, rownames(DOWN_met_TRp200))
+
+
+#MethylRRA
+#Functional class scoring
+UP_GSEARRA_TRp200 =methylRRA(cpg.pval = UP_met_TRp200, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+head(UP_GSEARRA_TRp200, 20)
+
+UP_GSEARRA_TRp200$NES = as.numeric(UP_GSEARRA_TRp200$NES)
+UP_GSEARRA_TRp200b = UP_GSEARRA_TRp200 %>% dplyr::filter(padj< 0.001) %>% arrange(pvalue)#arrange(desc(abs(NES)))
+UP_GSEARRA_TRp200[UP_GSEARRA_TRp200$NES <0,]
+write.csv(UP_GSEARRA_TRp200b, file="GSEARRA_TRp200_UP.csv")
+
+ggplot(UP_GSEARRA_TRp200b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,1000), breaks = c(50, 200, 400, 600, 800, 1000))+
+  labs(title = "Time response: P200", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_TRp200_UP.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(UP_GSEARRA_TRp200b[1:10,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size), shape = 21) +
+   #xlim(c(-12,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA time response: P200",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_TRp200_dotplot_UP.pdf"),height = 4, width = 5, paper='special')
+dev.off()
+
+
+DOWN_GSEARRA_TRp200 =methylRRA(cpg.pval = DOWN_met_TRp200, array.type = "EPIC", minsize = 50, 
+                           maxsize = 1000, GS.type = "GO", method = "GSEA", GS.idtype = "SYMBOL") 
+head(DOWN_GSEARRA_TRp200, 20)
+
+DOWN_GSEARRA_TRp200$NES = as.numeric(DOWN_GSEARRA_TRp200$NES)
+DOWN_GSEARRA_TRp200b = DOWN_GSEARRA_TRp200 %>% dplyr::filter(padj< 0.05) %>% arrange(desc(abs(NES)))
+DOWN_GSEARRA_TRp200[DOWN_GSEARRA_TRp200$NES <0,]
+write.csv(DOWN_GSEARRA_TRp200b, file="GSEARRA_TRp200_DOWN.csv")
+
+ggplot(DOWN_GSEARRA_TRp200b[1:30,], aes(x = NES , y = reorder(Description,NES), fill = Size))+
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%0.3f", round(padj, digits = 3))), size = 3,vjust = 0.5, nudge_x = -0.2)+
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE),  limits = c(50,1000), breaks = c(50, 200, 400, 600, 800, 1000))+
+  labs(title = "Time response: P200", x = "Normalized enrichment score", y = "")+
+  theme_classic()+ theme(text=element_text(size=10, family="ArialMT"))
+dev.copy(pdf,paste0(currentjob,"_TRp200_DOWN.pdf"), width = 8, height=5, paper='special')
+dev.off()
+
+ggplot(DOWN_GSEARRA_TRp200b[1:10,], aes(x = NES, y = reorder(Description,NES), fill = padj))+
+  geom_point(aes(size = Size), shape = 21) +
+   #xlim(c(-12,0)) +
+  scale_fill_continuous_sequential(palette = "Purple-Blue",guide = guide_colorbar(reverse = TRUE))+
+  labs(title = "MethylGSEA time response: P200",
+       subtitle = "Top 20 BP GO terms", x = "Norm. enrichment score", y = "")+
+  theme_few()+ theme(text=element_text(size=10, family="ArialMT"), panel.grid.major = element_line(colour = "grey90"))
+dev.copy(pdf,paste0(currentjob,"_TRp200_dotplot_DOWN.pdf"),height = 4, width = 6, paper='special')
+dev.off()
+```
+
+
+```{r}
+sessionInfo()
+```
